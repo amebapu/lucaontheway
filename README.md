@@ -6,7 +6,7 @@
 - 每天北京时间06:17计划更新，也可手动运行；排程可能延迟，以页面显示的采集时间为准。
 - 只做内容发现、八主题筛选和原片跳转，不保存实践记录、收藏或用户账号。
 - 六个已核验频道通过免费RSS订阅，不需要你的YouTube账号；个别来源失败时仍更新其他来源，全部失败才保留上次网站。
-- DeepSeek V4.1 Flash在后台生成中文标题、分类、短概要与关键点；网页访问不调用模型，模型使用AIHub项目额度。没有微信或邮件通知。
+- DeepSeek V4.1 Flash在后台生成中文标题、分类、短概要与关键点；网页访问不调用模型，模型使用TokenHub个人套餐额度。没有微信或邮件通知。
 
 ## 内容范围
 
@@ -39,7 +39,7 @@ npm run check
 
 ## GitHub Pages 发布
 
-本项目使用公开仓库的免费Pages与标准GitHub Actions，无需购买域名。源码和提交历史公开，采集数据与概要缓存不提交Git历史。YouTube订阅无需密钥；AI接入使用下面两个Actions Secrets。
+本项目使用公开仓库的免费Pages与标准GitHub Actions，无需购买域名。源码和提交历史公开，采集数据与概要缓存不提交Git历史。YouTube订阅无需密钥；AI接入使用下面一个Actions Secret。
 
 1. 仓库 Settings → Pages → Build and deployment，Source 选 **GitHub Actions**。
 2. 推送`main`会自动采集、复用已恢复的概要缓存并发布，未命中项标为“尚未生成速览”；push不读取模型密钥或产生新模型调用。
@@ -50,22 +50,23 @@ npm run check
 
 至少一个频道RSS抓取成功即可发布（即使该源没有近期候选也算抓取成功）；失败源本批不带旧条目，并显示“本批未获取”，不是退订或模型删除。全部来源失败才中止发布、保留上次网站和采集时间。页面拒绝展示超过28天的旧列表，旧部署公开元数据在下一次成功部署前仍可能存在。
 
-每批最多40条，每5条一个模型请求、每次最多4096输出token、45秒截止，最多8次，不自动重试。首个模型故障后停止余下请求，保留已成功的新概要/缓存，其余显示原文和“暂不可用”；模型故障不阻断RSS发布。首次或缓存淘汰后可能重新调用，费用以AIHub实际用量为准，不承诺全平台最低价或固定月费。
+每批最多40条，每5条一个模型请求、每次最多4096输出token、45秒截止，最多8次，不自动重试。首个模型故障后停止余下请求，保留已成功的新概要/缓存，其余显示原文和“暂不可用”；模型故障不阻断RSS发布。首次或缓存淘汰后可能重新调用，用量以TokenHub套餐统计为准，不承诺全平台最低价或固定月费。
 
 概要按模型、提示版本与原始标题/简介/日期等指纹复用；原文任何变化均重算，避免复用不当。Actions缓存只保留本批候选、可能淘汰。静态产物仍只有五个文件，不含调用器、配置、缓存、环境、依赖或审稿资料。
 
 GitHub定时任务可能延迟。公开仓库60天无repository activity时会自动停用schedule；官方未完整列举活动范围，也未要求必须人为操作，不能保证采集/发布产物会重置计时。停用后到Actions → **Publish parenting feed** → **Enable workflow**重新启用。不添加无内容保活提交。依据：[排程说明](https://docs.github.com/en/actions/how-tos/troubleshoot-workflows)、[自动停用规则](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows)、[Pages 免费条件](https://docs.github.com/en/pages/getting-started-with-github-pages)。
 
-## AIHub后台配置
+## TokenHub后台配置
 
-在仓库Settings → Secrets and variables → Actions添加Repository Secrets：
+在仓库Settings → Secrets and variables → Actions添加Repository Secret：
 
-- `AIHUB_API_KEY`：获授权使用的AIHub项目调用Key。
-- `AIHUB_ENDPOINT`：官方接入工具提供的完整HTTPS Chat Completions请求地址；使用平台实际值，不在公开代码中填写内部地址。
+- `TOKENHUB_API_KEY`：获授权使用的TokenHub个人套餐Key。
 
-模型请求固定为`deepseek-flash`（DeepSeek V4.1 Flash），关闭思考、使用JSON输出。Key仅进入后台进程环境与Authorization头，不放网页、仓库、URL参数、文件或日志。只有`main`的schedule/手动补跑步骤读取Secrets；PR只测试，push只用缓存。不要在聊天中发送Key。
+模型请求固定为`deepseek/deepseek-flash`（官方当前映射为DeepSeek V4.1 Flash 1017），关闭思考、使用JSON输出。后端固定请求`https://tokenhub.tencentmaas.com/plan/v3/chat/completions`，不读取环境中的端点覆盖值，也不回退到按量计费接口。Key仅进入后台进程环境与Authorization头，不放网页、仓库、URL参数、文件或日志。只有`main`的schedule/手动补跑步骤读取Secret；PR只测试，push只用缓存。不要在聊天中发送Key。
 
-仓库有写权限的人可修改工作流并使用这些Secrets，因此只向可信协作者开放写权限；使用现有项目Key会使用该项目额度，后续可换为专用小预算Key。网关在GitHub托管runner上的可达性需以真实运行验证；不可达时保留原文更新，不把Key移到浏览器。
+Token Plan个人版官方规则限制自动化脚本、自定义应用后端和非交互式批量调用；本项目按所有者明确选择使用个人套餐接口，不代表服务商批准此用途。若服务拒绝、额度耗尽或暂停，保留原文更新，不伪装客户端、绕过限制或改用其他计费产品。参见[个人版订阅须知](https://cloud.tencent.com/document/product/1823/130060)、[个人版接入配置](https://cloud.tencent.com/document/product/1823/130119)和[模型版本公告](https://cloud.tencent.com/announce/detail/2516)。
+
+仓库有写权限的人可修改工作流并使用该Secret，因此只向可信协作者开放写权限。GitHub托管runner上的实际接通需单独验证；不可达时保留原文更新，不把Key移到浏览器。旧AIHub Secrets不再被本工作流引用。
 
 ## 维护
 

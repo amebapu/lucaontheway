@@ -58,7 +58,7 @@ test('the actual build emits only static files and removes unrelated runtime fie
   const feed = snapshot(); feed.items[0].private_note = 'SYNTHETIC_PRIVATE_MARKER';
   feed.collection = { succeeded: [channel.id], failed: [], private_note: 'SYNTHETIC_PRIVATE_MARKER' };
   feed.enrichment = { status: 'ready', private_note: 'SYNTHETIC_PRIVATE_MARKER' };
-  feed.items[0].analysis = { model: 'deepseek-flash', basis: 'metadata', generated_at: feed.generated_at, title_zh: '一起玩拼图', summary: '简介介绍拼图互动，具体月龄未说明。', takeaways: ['先看原片。'], topics: ['fine_motor'], relevance: 'unclear', private_note: 'SYNTHETIC_PRIVATE_MARKER' };
+  feed.items[0].analysis = { model: 'deepseek/deepseek-flash', basis: 'metadata', generated_at: feed.generated_at, title_zh: '一起玩拼图', summary: '简介介绍拼图互动，具体月龄未说明。', takeaways: ['先看原片。'], topics: ['fine_motor'], relevance: 'unclear', private_note: 'SYNTHETIC_PRIVATE_MARKER' };
   const root = await buildFixture(t, { feed, channels: [{ ...channel, private_note: 'SYNTHETIC_PRIVATE_MARKER' }], private_notes: 'SYNTHETIC_PRIVATE_MARKER' });
   await writeFile(join(root, '.env'), 'SYNTHETIC_PRIVATE_MARKER');
   await writeFile(join(root, 'config.json'), 'SYNTHETIC_PRIVATE_MARKER');

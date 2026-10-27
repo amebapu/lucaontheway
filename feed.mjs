@@ -4,7 +4,7 @@ export const TOPICS = {
 };
 export const MAX_AGE = 28 * 86400000;
 export const CLOCK_SKEW = 5 * 60000;
-export const CONTENT_MODEL = 'deepseek-flash';
+export const CONTENT_MODEL = 'deepseek/deepseek-flash';
 export const validVideoId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{11}$/.test(id);
 export const videoUrl = id => validVideoId(id) ? `https://www.youtube.com/watch?v=${id}` : '';
 
