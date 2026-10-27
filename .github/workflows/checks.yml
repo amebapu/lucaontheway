@@ -45,8 +45,7 @@ jobs:
       - run: npm run enrich
         if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         env:
-          AIHUB_API_KEY: ${{ secrets.AIHUB_API_KEY }}
-          AIHUB_ENDPOINT: ${{ secrets.AIHUB_ENDPOINT }}
+          TOKENHUB_API_KEY: ${{ secrets.TOKENHUB_API_KEY }}
       - uses: actions/cache/save@v5
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && hashFiles('data/ai-cache.json') != ''
         continue-on-error: true
