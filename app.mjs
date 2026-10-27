@@ -4,6 +4,7 @@ const $ = selector => document.querySelector(selector);
 let feed = null, channels = [], topic = 'all', latestRequest = 0;
 function element(tag, className, text) { const el = document.createElement(tag); if (className) el.className = className; if (text !== undefined) el.textContent = text; return el; }
 function link(label, href) { const el = element('a', 'text-link', label); el.href = href; el.target = '_blank'; el.rel = 'noopener noreferrer'; return el; }
+function beijingTime(value) { return new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }); }
 function clockTime(seconds) { const value = Math.floor(seconds); return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`; }
 function playNote(item, play) {
   const details = element('details', 'original play-note'); details.append(element('summary', '', '字幕里的玩法笔记'));
@@ -37,14 +38,14 @@ function makeCard(item) {
   head.append(element('span', '', item.topics.map(t => TOPICS[t]).join(' · ')), element('small', '', 'YouTube'));
   const body = element('div', 'card-body');
   const analysis = item.analysis, channelName = channels.find(channel => channel.id === item.channel_id)?.name || item.channel;
-  body.append(element('h3', '', analysis?.title_zh || item.title), element('p', 'byline', `${channelName} · ${new Date(item.published_at).toLocaleDateString('zh-CN')}`));
+  body.append(element('h3', '', analysis?.title_zh || item.title), element('p', 'byline', channelName), element('p', 'byline', `作者发布：${beijingTime(item.published_at)}（北京时间）`));
   if (analysis) {
     body.append(element('p', 'ai-summary', analysis.summary));
     if (analysis.takeaways.length) {
       const points = element('ul', 'ai-points'); points.append(...analysis.takeaways.map(point => element('li', '', point))); body.append(points);
     }
     const relevance = { relevant: '主题与1—2岁陪伴相关（AI初筛）', unclear: '月龄或相关性尚不明确', low: '相关度较低，请自行取舍' }[analysis.relevance];
-    body.append(element('p', 'card-flag', `${analysis.basis === 'captions' ? '字幕速览（仅文本，未看画面）' : '标题与简介速览'} · ${relevance}`), element('p', 'byline', `概要生成：${new Date(analysis.generated_at).toLocaleString('zh-CN', { hour12: false })}`));
+    body.append(element('p', 'card-flag', `${analysis.basis === 'captions' ? '字幕速览（仅文本，未看画面）' : '标题与简介速览'} · ${relevance}`), element('p', 'byline', `概要生成：${beijingTime(analysis.generated_at)}（北京时间）`));
     if (analysis.caption) {
       const ranges = analysis.caption.ranges.map(range => `${clockTime(range.start)}–${clockTime(range.end)}`).join('、');
       body.append(element('p', 'byline', `${analysis.caption.language} · ${analysis.caption.coverage === 'full' ? '本次字幕轨全部读入' : '字幕片段'} · 已读 ${ranges}`));
@@ -85,13 +86,16 @@ async function loadFeed() {
     const state = await response.json();
     if (serial !== latestRequest) return;
     feed = state.feed ? parseFeed(state.feed) : null;
+    let siteTime = '本站更新时间暂不可用';
+    try { assertFresh(state.site_generated_at); siteTime = `本站更新：${beijingTime(state.site_generated_at)}（本批页面生成时间，北京时间）`; } catch { /* Older deployments may not include a page generation timestamp. */ }
+    $('#site-updated-at').textContent = `${siteTime} · 自动更新：每天北京时间06:17，排程可能延迟`;
     channels = state.channels;
     const sources = $('#subscribed-channels'); sources.replaceChildren();
     for (const channel of channels) { const li = element('li'), failed = feed?.collection?.failed.includes(channel.id); li.append(link(channel.name, `https://www.youtube.com/channel/${channel.id}`), element('small', '', ` · ${channel.topics.map(t => TOPICS[t]).join(' / ')}${failed ? ' · 本批未获取，旧条目暂不展示' : ''}`)); sources.append(li); }
     $('#status-dot').classList.toggle('ready', !!feed);
     $('#status-text').textContent = feed ? (feed.collection?.failed.length ? '部分来源已更新' : '已载入订阅内容') : '尚无有效订阅列表';
     const coverage = feed?.collection ? ` · ${feed.collection.succeeded.length}/${channels.length} 个来源已获取` : '';
-    $('#status-detail').textContent = feed ? `本批采集：${new Date(feed.generated_at).toLocaleString('zh-CN', { hour12: false })} · 最近14天发布${coverage}` : '尚未首次采集或旧列表已过期，可先浏览精选来源。';
+    $('#status-detail').textContent = feed ? `本批采集：${beijingTime(feed.generated_at)}（北京时间） · 最近14天发布${coverage}` : '尚未首次采集或旧列表已过期，可先浏览精选来源。';
     $('#collection-detail').textContent = '计划每天北京时间06:17更新，GitHub 排程可能延迟。个别来源失败时更新其他来源，失败来源旧条目本批暂不展示；全部来源失败则保留上次网站，超过28天停止展示旧列表。';
     render();
   } catch (error) {
