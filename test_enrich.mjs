@@ -48,7 +48,7 @@ test('production CLI fixes the personal-plan endpoint and passes only the select
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'parenting-endpoint-')));
   try {
     for (const name of ['scripts', 'data', 'bin']) mkdirSync(join(dir, name));
-    for (const name of ['enrich.mjs', 'ai-transport.py']) copyFileSync(fileURLToPath(new URL(`scripts/${name}`, import.meta.url)), join(dir, 'scripts', name));
+    for (const name of ['enrich.mjs', 'ai-transport.py', 'captions.mjs']) copyFileSync(fileURLToPath(new URL(`scripts/${name}`, import.meta.url)), join(dir, 'scripts', name));
     for (const name of ['feed.mjs', 'rss.mjs']) symlinkSync(fileURLToPath(new URL(name, import.meta.url)), join(dir, name));
     writeFileSync(join(dir, 'data/feed.json'), JSON.stringify({ feed: snapshot(), channels: [] }));
     const reply = { status: 200, body: JSON.stringify(response([analysis(item(0).id)])) };

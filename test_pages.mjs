@@ -82,3 +82,23 @@ test('the build rejects expired data before changing an existing output', async 
   assert.notEqual(build(root).status, 0);
   assert.equal(await readFile(join(root, 'dist/index.html'), 'utf8'), 'SYNTHETIC_PREVIOUS_SITE');
 });
+test('the actual build keeps timestamped play notes while excluding transcript text and backend caches', async t => {
+  const feed = snapshot(), note = { text: '陪孩子来回滚球。', start: 6 };
+  feed.items[0].caption_status = 'available';
+  feed.items[0].captions = 'SYNTHETIC_RAW_TRANSCRIPT';
+  feed.items[0].analysis = {
+    model: 'deepseek/deepseek-flash', basis: 'captions', generated_at: feed.generated_at,
+    title_zh: '一起滚球', summary: '字幕介绍滚球互动。', takeaways: [], topics: ['everyday'], relevance: 'unclear',
+    caption: { language: 'en', coverage: 'excerpt', fetched_at: feed.generated_at, ranges: [{ start: 5, end: 10 }], cues: 'SYNTHETIC_RAW_TRANSCRIPT' },
+    play: { age: null, materials: [], steps: [{ ...note, quote: 'SYNTHETIC_RAW_TRANSCRIPT' }], cautions: [] },
+    raw_response: 'SYNTHETIC_RAW_TRANSCRIPT',
+  };
+  const root = await buildFixture(t, { feed, channels: [channel], transcript: 'SYNTHETIC_RAW_TRANSCRIPT' });
+  for (const name of ['captions-cache.json', 'ai-cache.json']) await writeFile(join(root, 'data', name), 'SYNTHETIC_RAW_TRANSCRIPT');
+  assert.equal(build(root).status, 0);
+  const text = await readFile(join(root, 'dist/feed.json'), 'utf8'), published = JSON.parse(text).feed.items[0];
+  assert.deepEqual(published.analysis.play.steps, [note]);
+  assert.equal(published.caption_status, 'available');
+  assert.equal(text.includes('SYNTHETIC_RAW_TRANSCRIPT'), false);
+  assert.deepEqual((await readdir(join(root, 'dist'))).sort(), ['app.mjs', 'feed.json', 'feed.mjs', 'index.html', 'styles.css']);
+});

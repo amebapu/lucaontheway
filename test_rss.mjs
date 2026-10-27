@@ -33,8 +33,8 @@ test('old entries are filtered and entities, excessive depth and entry count are
 });
 test('channel configuration rejects duplicates, unsupported topics and too many sources', () => {
   assert.equal(validateChannels([channel]).length, 1);
-  const many = Array.from({ length: 9 }, (_, index) => ({ ...channel, id: `UC${String.fromCharCode(65 + index).repeat(22)}` }));
-  assert.equal(validateChannels(many.slice(0, 8)).length, 8);
+  const many = Array.from({ length: 11 }, (_, index) => ({ ...channel, id: `UC${String.fromCharCode(65 + index).repeat(22)}` }));
+  assert.equal(validateChannels(many.slice(0, 10)).length, 10);
   assert.equal(validateChannels([{ ...channel, id: `UC${'A'.repeat(20)}_-` }]).length, 1);
   for (const bad of [[], [channel, channel], many, [{ ...channel, topics: ['constructor'] }], [{ ...channel, id: 'https://other.example.test' }]]) assert.throws(() => validateChannels(bad));
 });
@@ -71,6 +71,18 @@ test('one failed channel publishes healthy sources; all failures reject the batc
   const empty = await collectChannels([channel], async () => new Response(atom('')));
   assert.deepEqual(empty.collection.succeeded, [channel.id]);
   assert.deepEqual(empty.items, []);
+});
+
+test('ten sources still publish when two fail', async () => {
+  const channels = Array.from({ length: 10 }, (_, index) => ({ ...channel, id: `UC${String.fromCharCode(65 + index).repeat(22)}` }));
+  const result = await collectChannels(channels, async url => {
+    const source = channels.find(source => url.includes(source.id));
+    if (channels.indexOf(source) < 2) return new Response('unavailable', { status: 404 });
+    return new Response(atom(entry({ cid: source.id, id: `${source.id[2]}0000000000` }), source.id));
+  });
+  assert.equal(result.collection.succeeded.length, 8);
+  assert.equal(result.collection.failed.length, 2);
+  assert.equal(result.items.length, 8);
 });
 
 test('round-robin selection covers every active source and preserves single-source depth', async () => {

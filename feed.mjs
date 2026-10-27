@@ -7,6 +7,7 @@ export const CLOCK_SKEW = 5 * 60000;
 export const CONTENT_MODEL = 'deepseek/deepseek-flash';
 export const validVideoId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{11}$/.test(id);
 export const videoUrl = id => validVideoId(id) ? `https://www.youtube.com/watch?v=${id}` : '';
+export const captionUrl = (id, seconds) => validVideoId(id) && Number.isSafeInteger(seconds) && seconds >= 0 && seconds <= 14400 ? `${videoUrl(id)}&t=${seconds}s` : '';
 
 function timestamp(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(value)) throw new Error('订阅时间格式不正确');
@@ -20,13 +21,44 @@ function text(value, limit) {
   return value;
 }
 
+export function parseCaptionProvenance(raw, now = Date.now()) {
+  if (!raw || typeof raw.language !== 'string' || !/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$/.test(raw.language) || !['full', 'excerpt'].includes(raw.coverage) || !Array.isArray(raw.ranges) || !raw.ranges.length || raw.ranges.length > 3) throw new Error('字幕来源格式不正确');
+  assertFresh(raw.fetched_at, now);
+  let end = -1;
+  const ranges = raw.ranges.map(range => {
+    if (!range || !Number.isFinite(range.start) || !Number.isFinite(range.end) || range.start < 0 || range.end < range.start || range.end > 14400 || range.start < end) throw new Error('字幕时间范围不正确');
+    end = range.end;
+    return { start: range.start, end: range.end };
+  });
+  return { language: raw.language, coverage: raw.coverage, fetched_at: raw.fetched_at, ranges };
+}
+
+function playPoint(raw, caption, limit = 160) {
+  if (!raw || !Number.isSafeInteger(raw.start) || !caption.ranges.some(range => raw.start >= Math.floor(range.start) && raw.start <= Math.floor(range.end))) throw new Error('玩法缺少字幕时间点');
+  const value = text(raw.text, limit);
+  if (!value.trim() || !/[\u3400-\u9fff]/u.test(value)) throw new Error('玩法缺少中文内容');
+  return { text: value, start: raw.start };
+}
+
 export function parseAnalysis(raw, now = Date.now()) {
-  if (!raw || raw.model !== CONTENT_MODEL || raw.basis !== 'metadata' || !['relevant', 'unclear', 'low'].includes(raw.relevance) || !Array.isArray(raw.topics) || !raw.topics.length || raw.topics.length > 3 || raw.topics.some(t => !Object.hasOwn(TOPICS, t)) || !Array.isArray(raw.takeaways) || raw.takeaways.length > 2) throw new Error('中文速览格式不正确');
+  if (!raw || raw.model !== CONTENT_MODEL || !['metadata', 'captions'].includes(raw.basis) || !['relevant', 'unclear', 'low'].includes(raw.relevance) || !Array.isArray(raw.topics) || !raw.topics.length || raw.topics.length > 3 || raw.topics.some(t => !Object.hasOwn(TOPICS, t)) || !Array.isArray(raw.takeaways) || raw.takeaways.length > 2) throw new Error('中文速览格式不正确');
   assertFresh(raw.generated_at, now);
   const title_zh = text(raw.title_zh, 100), summary = text(raw.summary, 240);
   if (!/[\u3400-\u9fff]/u.test(title_zh) || !/[\u3400-\u9fff]/u.test(summary)) throw new Error('中文速览缺少中文内容');
   const takeaways = raw.takeaways.map(point => { const value = text(point, 80); if (!value.trim()) throw new Error('中文速览要点为空'); return value; });
-  return { model: CONTENT_MODEL, basis: 'metadata', generated_at: raw.generated_at, title_zh, summary, takeaways, topics: [...new Set(raw.topics)], relevance: raw.relevance };
+  const analysis = { model: CONTENT_MODEL, basis: raw.basis, generated_at: raw.generated_at, title_zh, summary, takeaways, topics: [...new Set(raw.topics)], relevance: raw.relevance };
+  if (raw.basis === 'captions') {
+    analysis.caption = parseCaptionProvenance(raw.caption, now);
+    if (raw.play && raw.relevance !== 'low') {
+      const play = { age: raw.play.age === null ? null : playPoint(raw.play.age, analysis.caption, 120) };
+      for (const [name, limit] of [['materials', 3], ['steps', 4], ['cautions', 3]]) {
+        if (!Array.isArray(raw.play[name]) || raw.play[name].length > limit) throw new Error('玩法内容格式不正确');
+        play[name] = raw.play[name].map(point => playPoint(point, analysis.caption));
+      }
+      analysis.play = play;
+    }
+  }
+  return analysis;
 }
 
 export function assertFresh(value, now = Date.now()) {
@@ -46,7 +78,7 @@ export function parseFeed(raw, now = Date.now()) {
     const value = raw.collection;
     if (!value || !Array.isArray(value.succeeded) || !value.succeeded.length || !Array.isArray(value.failed)) throw new Error('来源更新状态不正确');
     const ids = [...value.succeeded, ...value.failed];
-    if (ids.length > 8 || ids.some(id => typeof id !== 'string' || !/^UC[A-Za-z0-9_-]{22}$/.test(id)) || new Set(ids).size !== ids.length) throw new Error('来源更新状态不正确');
+    if (ids.length > 10 || ids.some(id => typeof id !== 'string' || !/^UC[A-Za-z0-9_-]{22}$/.test(id)) || new Set(ids).size !== ids.length) throw new Error('来源更新状态不正确');
     collection = { succeeded: [...value.succeeded], failed: [...value.failed] };
   }
   const unique = new Map();
@@ -63,6 +95,7 @@ export function parseFeed(raw, now = Date.now()) {
       published_at: item.published_at, fetched_at: item.fetched_at, topics: [...new Set(item.topics)],
     };
     if (collection && !collection.succeeded.includes(clean.channel_id)) throw new Error('视频来源本批未获取');
+    if (['not_configured', 'available', 'unavailable', 'pending', 'error', 'not_selected'].includes(item.caption_status)) clean.caption_status = item.caption_status;
     if (item.analysis) {
       try {
         clean.analysis = parseAnalysis(item.analysis, now);
@@ -80,6 +113,10 @@ export function parseFeed(raw, now = Date.now()) {
 
 export function filterItems(items, topic, query) {
   const needle = query.trim().toLocaleLowerCase();
-  return items.filter(item => (topic === 'all' || item.topics.includes(topic)) && `${item.title} ${item.channel} ${item.description} ${item.analysis?.title_zh || ''} ${item.analysis?.summary || ''} ${item.analysis?.takeaways.join(' ') || ''} ${item.topics.map(t => TOPICS[t]).join(' ')}`.toLocaleLowerCase().includes(needle));
+  return items.filter(item => {
+    const play = item.analysis?.play;
+    const notes = play ? [play.age?.text || '', ...play.materials.map(point => point.text), ...play.steps.map(point => point.text), ...play.cautions.map(point => point.text)].join(' ') : '';
+    return (topic === 'all' || item.topics.includes(topic)) && `${item.title} ${item.channel} ${item.description} ${item.analysis?.title_zh || ''} ${item.analysis?.summary || ''} ${item.analysis?.takeaways.join(' ') || ''} ${notes} ${item.topics.map(t => TOPICS[t]).join(' ')}`.toLocaleLowerCase().includes(needle);
+  });
 }
 
