@@ -10,7 +10,7 @@ export class FeedError extends Error {
 }
 
 export function validateChannels(channels) {
-  if (!Array.isArray(channels) || !channels.length || channels.length > 2) throw new FeedError('channels_not_configured');
+  if (!Array.isArray(channels) || !channels.length || channels.length > 8) throw new FeedError('channels_not_configured');
   const ids = new Set();
   for (const channel of channels) {
     if (!channel || !/^UC[A-Za-z0-9_-]{22}$/.test(channel.id) || typeof channel.name !== 'string' || !channel.name || channel.name.length > 120 || !Array.isArray(channel.topics) || !channel.topics.length || channel.topics.some(t => !Object.hasOwn(TOPICS, t)) || ids.has(channel.id)) throw new FeedError('invalid_channel');
@@ -122,15 +122,21 @@ export async function collectChannels(channels, fetcher = fetch) {
   validateChannels(channels);
   const now = Date.now(), deadline = now + 15000;
   const results = await Promise.allSettled(channels.map(channel => fetchChannel(channel, now, deadline, fetcher)));
-  const failed = results.find(result => result.status === 'rejected');
-  if (failed) throw failed.reason;
-  const unique = new Map();
-  for (const { value } of results) for (const item of value) {
-    if (unique.has(item.id)) item.topics = [...new Set([...unique.get(item.id).topics, ...item.topics])];
-    unique.set(item.id, item);
+  if (results.every(result => result.status === 'rejected')) throw results[0].reason;
+  const collection = { succeeded: [], failed: [] }, groups = [];
+  for (const [index, result] of results.entries()) {
+    collection[result.status === 'fulfilled' ? 'succeeded' : 'failed'].push(channels[index].id);
+    if (result.status === 'fulfilled') groups.push([...new Map(result.value.map(item => [item.id, item])).values()].sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at) || a.id.localeCompare(b.id)));
   }
-  const items = [...unique.values()].sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at) || a.id.localeCompare(b.id)).slice(0, 30);
-  const feed = { schema_version: 1, source: 'youtube', mode: 'channels', generated_at: new Date(now).toISOString(), items };
+  const unique = new Map();
+  for (let index = 0; index < 15 && unique.size < 40; index++) for (const group of groups) {
+    const item = group[index];
+    if (!item) continue;
+    if (unique.has(item.id)) unique.get(item.id).topics = [...new Set([...unique.get(item.id).topics, ...item.topics])];
+    else if (unique.size < 40) unique.set(item.id, item);
+  }
+  const items = [...unique.values()].sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at) || a.id.localeCompare(b.id));
+  const feed = { schema_version: 1, source: 'youtube', mode: 'channels', generated_at: new Date(now).toISOString(), collection, items };
   parseFeed(feed, now);
   return feed;
 }

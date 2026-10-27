@@ -4,6 +4,7 @@ export const TOPICS = {
 };
 export const MAX_AGE = 28 * 86400000;
 export const CLOCK_SKEW = 5 * 60000;
+export const CONTENT_MODEL = 'deepseek-flash';
 export const validVideoId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{11}$/.test(id);
 export const videoUrl = id => validVideoId(id) ? `https://www.youtube.com/watch?v=${id}` : '';
 
@@ -19,6 +20,15 @@ function text(value, limit) {
   return value;
 }
 
+export function parseAnalysis(raw, now = Date.now()) {
+  if (!raw || raw.model !== CONTENT_MODEL || raw.basis !== 'metadata' || !['relevant', 'unclear', 'low'].includes(raw.relevance) || !Array.isArray(raw.topics) || !raw.topics.length || raw.topics.length > 3 || raw.topics.some(t => !Object.hasOwn(TOPICS, t)) || !Array.isArray(raw.takeaways) || raw.takeaways.length > 2) throw new Error('中文速览格式不正确');
+  assertFresh(raw.generated_at, now);
+  const title_zh = text(raw.title_zh, 100), summary = text(raw.summary, 240);
+  if (!/[\u3400-\u9fff]/u.test(title_zh) || !/[\u3400-\u9fff]/u.test(summary)) throw new Error('中文速览缺少中文内容');
+  const takeaways = raw.takeaways.map(point => { const value = text(point, 80); if (!value.trim()) throw new Error('中文速览要点为空'); return value; });
+  return { model: CONTENT_MODEL, basis: 'metadata', generated_at: raw.generated_at, title_zh, summary, takeaways, topics: [...new Set(raw.topics)], relevance: raw.relevance };
+}
+
 export function assertFresh(value, now = Date.now()) {
   const time = timestamp(value);
   if (time > now + CLOCK_SKEW) throw new Error('订阅时间超前，请检查设备时钟');
@@ -31,6 +41,14 @@ export function parseFeed(raw, now = Date.now()) {
     throw new Error('订阅数据格式不正确');
   }
   const generated = assertFresh(raw.generated_at, now);
+  let collection;
+  if (raw.collection !== undefined) {
+    const value = raw.collection;
+    if (!value || !Array.isArray(value.succeeded) || !value.succeeded.length || !Array.isArray(value.failed)) throw new Error('来源更新状态不正确');
+    const ids = [...value.succeeded, ...value.failed];
+    if (ids.length > 8 || ids.some(id => typeof id !== 'string' || !/^UC[A-Za-z0-9_-]{22}$/.test(id)) || new Set(ids).size !== ids.length) throw new Error('来源更新状态不正确');
+    collection = { succeeded: [...value.succeeded], failed: [...value.failed] };
+  }
   const unique = new Map();
   for (const item of raw.items) {
     if (!item || !validVideoId(item.id) || typeof item.channel_id !== 'string' || !/^UC[A-Za-z0-9_-]{22}$/.test(item.channel_id) || !Array.isArray(item.topics) || !item.topics.length || item.topics.some(t => !Object.hasOwn(TOPICS, t))) {
@@ -44,14 +62,24 @@ export function parseFeed(raw, now = Date.now()) {
       channel: text(item.channel, 300), channel_id: item.channel_id,
       published_at: item.published_at, fetched_at: item.fetched_at, topics: [...new Set(item.topics)],
     };
+    if (collection && !collection.succeeded.includes(clean.channel_id)) throw new Error('视频来源本批未获取');
+    if (item.analysis) {
+      try {
+        clean.analysis = parseAnalysis(item.analysis, now);
+        clean.topics = [...new Set([...clean.topics, ...clean.analysis.topics])];
+      } catch { /* Invalid optional analysis falls back to the original metadata. */ }
+    }
     if (unique.has(item.id)) clean.topics = [...new Set([...unique.get(item.id).topics, ...clean.topics])];
     unique.set(item.id, clean);
   }
-  return { generated_at: raw.generated_at, mode: raw.mode, items: [...unique.values()].sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at)) };
+  const feed = { generated_at: raw.generated_at, mode: raw.mode, items: [...unique.values()].sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at)) };
+  if (collection) feed.collection = collection;
+  if (['ready', 'partial', 'unavailable', 'not_configured', 'cache_only'].includes(raw.enrichment?.status)) feed.enrichment = { status: raw.enrichment.status };
+  return feed;
 }
 
 export function filterItems(items, topic, query) {
   const needle = query.trim().toLocaleLowerCase();
-  return items.filter(item => (topic === 'all' || item.topics.includes(topic)) && `${item.title} ${item.channel} ${item.description} ${item.topics.map(t => TOPICS[t]).join(' ')}`.toLocaleLowerCase().includes(needle));
+  return items.filter(item => (topic === 'all' || item.topics.includes(topic)) && `${item.title} ${item.channel} ${item.description} ${item.analysis?.title_zh || ''} ${item.analysis?.summary || ''} ${item.analysis?.takeaways.join(' ') || ''} ${item.topics.map(t => TOPICS[t]).join(' ')}`.toLocaleLowerCase().includes(needle));
 }
 

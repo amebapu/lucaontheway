@@ -1,6 +1,10 @@
 {
   "channels": [
     {"id": "UCuwaJVAF2xhzH9MSi5YC24g", "name": "Raising Little Talkers", "topics": ["language", "reading", "everyday"]},
-    {"id": "UCY3LTppWQBnBmJ4ISRW59zA", "name": "Pathways", "topics": ["movement", "fine_motor", "sensory"]}
+    {"id": "UCY3LTppWQBnBmJ4ISRW59zA", "name": "Pathways", "topics": ["movement", "fine_motor", "sensory"]},
+    {"id": "UCs_CXnifPUvP1zKIpgAYwqw", "name": "Emma Hubbard", "topics": ["movement", "fine_motor", "everyday"]},
+    {"id": "UCa5A44a4rnjK0ykI8PLxdcA", "name": "The Artful Parent", "topics": ["art", "sensory", "everyday"]},
+    {"id": "UCAAM-YUR69IX4a3gNsPwygQ", "name": "MOTHERCOULD", "topics": ["sensory", "art", "fine_motor", "everyday"]},
+    {"id": "UC0poUqIxO3uTYTw1zVgzeKw", "name": "Lovevery（品牌频道，含商品内容）", "topics": ["theory", "fine_motor", "reading", "everyday"]}
   ]
 }

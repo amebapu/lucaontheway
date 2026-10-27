@@ -56,6 +56,9 @@ test('a valid empty collection publishes zero candidates', async t => {
 });
 test('the actual build emits only static files and removes unrelated runtime fields', async t => {
   const feed = snapshot(); feed.items[0].private_note = 'SYNTHETIC_PRIVATE_MARKER';
+  feed.collection = { succeeded: [channel.id], failed: [], private_note: 'SYNTHETIC_PRIVATE_MARKER' };
+  feed.enrichment = { status: 'ready', private_note: 'SYNTHETIC_PRIVATE_MARKER' };
+  feed.items[0].analysis = { model: 'deepseek-flash', basis: 'metadata', generated_at: feed.generated_at, title_zh: '一起玩拼图', summary: '简介介绍拼图互动，具体月龄未说明。', takeaways: ['先看原片。'], topics: ['fine_motor'], relevance: 'unclear', private_note: 'SYNTHETIC_PRIVATE_MARKER' };
   const root = await buildFixture(t, { feed, channels: [{ ...channel, private_note: 'SYNTHETIC_PRIVATE_MARKER' }], private_notes: 'SYNTHETIC_PRIVATE_MARKER' });
   await writeFile(join(root, '.env'), 'SYNTHETIC_PRIVATE_MARKER');
   await writeFile(join(root, 'config.json'), 'SYNTHETIC_PRIVATE_MARKER');
@@ -65,6 +68,7 @@ test('the actual build emits only static files and removes unrelated runtime fie
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual((await readdir(join(root, 'dist'))).sort(), ['app.mjs', 'feed.json', 'feed.mjs', 'index.html', 'styles.css']);
   assert.equal((await readFile(join(root, 'dist/feed.json'), 'utf8')).includes('SYNTHETIC_PRIVATE_MARKER'), false);
+  assert.equal(JSON.parse(await readFile(join(root, 'dist/feed.json'), 'utf8')).feed.items[0].analysis.title_zh, '一起玩拼图');
   const html = await readFile(join(root, 'dist/index.html'), 'utf8');
   for (const [, link] of html.matchAll(/(?:href|src)="([^"#][^"]*)"/g)) {
     if (/^https?:/.test(link)) continue;

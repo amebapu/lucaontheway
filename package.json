@@ -5,10 +5,11 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "collect": "node scripts/collect.mjs",
+    "enrich": "node scripts/enrich.mjs",
     "build": "node scripts/build.mjs",
-    "test": "node --test test_feed.mjs test_rss.mjs test_pages.mjs",
+    "test": "node --test test_feed.mjs test_rss.mjs test_pages.mjs test_enrich.mjs",
     "dev": "npm run build && node scripts/serve.mjs",
-    "check": "node --check app.mjs && node --check scripts/serve.mjs && npm test"
+    "check": "node --check app.mjs && node --check scripts/serve.mjs && node --check scripts/enrich.mjs && npm test"
   },
   "dependencies": { "saxes": "6.0.0" }
 }

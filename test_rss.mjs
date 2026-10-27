@@ -33,7 +33,10 @@ test('old entries are filtered and entities, excessive depth and entry count are
 });
 test('channel configuration rejects duplicates, unsupported topics and too many sources', () => {
   assert.equal(validateChannels([channel]).length, 1);
-  for (const bad of [[], [channel, channel], [channel, channel, channel], [{ ...channel, topics: ['constructor'] }], [{ ...channel, id: 'https://other.example.test' }]]) assert.throws(() => validateChannels(bad));
+  const many = Array.from({ length: 9 }, (_, index) => ({ ...channel, id: `UC${String.fromCharCode(65 + index).repeat(22)}` }));
+  assert.equal(validateChannels(many.slice(0, 8)).length, 8);
+  assert.equal(validateChannels([{ ...channel, id: `UC${'A'.repeat(20)}_-` }]).length, 1);
+  for (const bad of [[], [channel, channel], many, [{ ...channel, topics: ['constructor'] }], [{ ...channel, id: 'https://other.example.test' }]]) assert.throws(() => validateChannels(bad));
 });
 test('collection uses fixed HTTPS feeds, no redirects or API key, and deduplicates', async () => {
   const calls = [];
@@ -59,9 +62,28 @@ test('stream limit counts actual bytes and collection rejects oversized bodies',
   await assert.rejects(readTextLimited(new Response('x'.repeat(21)).body, 20), /payload_too_large/);
   await assert.rejects(collectChannels([channel], async () => new Response('x'.repeat(256 * 1024 + 1))), /payload_too_large/);
 });
-test('one failed channel rejects the complete batch instead of publishing partial results', async () => {
+test('one failed channel publishes healthy sources; all failures reject the batch', async () => {
   const other = { ...channel, id: `UC${'B'.repeat(22)}` };
-  await assert.rejects(collectChannels([channel, other], async url => url.includes(other.id) ? new Response('failed', { status: 404 }) : new Response(atom())), /upstream_unavailable/);
+  const feed = await collectChannels([channel, other], async url => url.includes(other.id) ? new Response('failed', { status: 404 }) : new Response(atom()));
+  assert.equal(feed.items.length, 1);
+  assert.deepEqual(feed.collection, { succeeded: [channel.id], failed: [other.id] });
+  await assert.rejects(collectChannels([channel, other], async () => new Response('failed', { status: 404 })), /upstream_unavailable/);
+  const empty = await collectChannels([channel], async () => new Response(atom('')));
+  assert.deepEqual(empty.collection.succeeded, [channel.id]);
+  assert.deepEqual(empty.items, []);
+});
+
+test('round-robin selection covers every active source and preserves single-source depth', async () => {
+  const channels = Array.from({ length: 8 }, (_, index) => ({ ...channel, id: `UC${String.fromCharCode(65 + index).repeat(22)}` }));
+  const fetcher = async url => {
+    const source = channels.find(source => url.includes(source.id)), letter = source.id[2];
+    const entries = Array.from({ length: 15 }, (_, index) => entry({ id: `${letter}${String(index).padStart(10, '0')}`, cid: source.id, title: 'Toddler play', published: stamp(-index * 3600000) })).join('');
+    return new Response(atom(entries, source.id));
+  };
+  const feed = await collectChannels(channels, fetcher);
+  assert.equal(feed.items.length, 40);
+  for (const source of channels) assert.equal(feed.items.filter(item => item.channel_id === source.id).length, 5);
+  assert.equal((await collectChannels([channels[0]], fetcher)).items.length, 15);
 });
 
 test('content rules cover the requested eight topics without treating titles as age verification', () => {
