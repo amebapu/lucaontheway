@@ -14,14 +14,14 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def send():
-    target = os.environ.get('AIHUB_ENDPOINT', '')
+    target = os.environ.get('TOKENHUB_ENDPOINT', '')
     parsed = urllib.parse.urlsplit(target)
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         return {'error': 'network'}
     body = sys.stdin.buffer.read(24 * 1024 + 1)
     if len(body) > 24 * 1024:
         return {'error': 'response_format'}
-    key = os.environ.get('AIHUB_API_KEY', '')
+    key = os.environ.get('TOKENHUB_API_KEY', '')
     if not key:
         return {'error': 'authentication'}
     request = urllib.request.Request(target, data=body, method='POST', headers={
