@@ -1,15 +1,22 @@
-name: Verify parenting lab
+name: Publish parenting feed
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '17 22 * * *'
 
 permissions:
   contents: read
 
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
-  verify:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -22,5 +29,27 @@ jobs:
           package-manager-cache: false
       - run: npm ci --ignore-scripts
       - run: npm run check
-        env:
-          WRANGLER_SEND_METRICS: 'false'
+      - run: npm run collect
+        if: github.event_name != 'pull_request'
+      - run: npm run build
+        if: github.event_name != 'pull_request'
+      - uses: actions/upload-pages-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          path: dist
+          retention-days: 1
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment
