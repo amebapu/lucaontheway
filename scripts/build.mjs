@@ -5,6 +5,10 @@ import { validateChannels } from '../rss.mjs';
 const state = JSON.parse(await readFile('data/feed.json', 'utf8'));
 const feed = { schema_version: 1, source: 'youtube', ...parseFeed(state.feed) };
 const channels = validateChannels(state.channels).map(({ id, name, topics }) => ({ id, name, topics }));
+if (feed.collection) {
+  const ids = [...feed.collection.succeeded, ...feed.collection.failed];
+  if (ids.length !== channels.length || channels.some(channel => !ids.includes(channel.id))) throw new Error('来源配置与更新状态不一致');
+}
 
 await mkdir('dist', { recursive: true });
 for (const name of await readdir('dist')) await rm(`dist/${name}`, { recursive: true });
