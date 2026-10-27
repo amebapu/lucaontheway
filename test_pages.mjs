@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { collectToFile } from './scripts/collect.mjs';
+import { collectToFile, fetchRss } from './scripts/collect.mjs';
 import { FeedError } from './rss.mjs';
 
 const channel = { id: `UC${'A'.repeat(22)}`, name: 'Synthetic source', topics: ['language'] };
@@ -28,6 +28,21 @@ async function buildFixture(t, state) {
 function build(root) {
   return spawnSync(process.execPath, [fileURLToPath(new URL('scripts/build.mjs', import.meta.url))], { cwd: root, encoding: 'utf8' });
 }
+
+test('RSS failure diagnostics expose only HTTP status or a fixed network error type', async t => {
+  const originalFetch = globalThis.fetch, originalInfo = console.info, messages = [];
+  t.after(() => { globalThis.fetch = originalFetch; console.info = originalInfo; });
+  console.info = message => messages.push(message);
+  globalThis.fetch = async () => new Response('SYNTHETIC_PRIVATE_MARKER', { status: 403, headers: { Location: 'SYNTHETIC_PRIVATE_MARKER' } });
+  assert.equal((await fetchRss('https://www.youtube.com/feeds/videos.xml', { headers: { Authorization: 'SYNTHETIC_PRIVATE_MARKER' } })).status, 403);
+  for (const code of ['ECONNRESET', 'SYNTHETIC_PRIVATE_MARKER']) {
+    const failure = new TypeError('SYNTHETIC_PRIVATE_MARKER', { cause: { code } });
+    globalThis.fetch = async () => { throw failure; };
+    await assert.rejects(fetchRss('https://www.youtube.com/feeds/videos.xml'), error => error === failure);
+  }
+  assert.deepEqual(messages.map(message => JSON.parse(message)), [{ source: 'youtube_rss', http_status: 403 }, { source: 'youtube_rss', network_error: 'ECONNRESET' }, { source: 'youtube_rss', network_error: 'OTHER' }]);
+  assert.equal(messages.join('').includes('SYNTHETIC_PRIVATE_MARKER'), false);
+});
 
 test('collector publishes a validated snapshot and only public channel fields', async t => {
   const root = await temporaryProject(t), destination = join(root, 'data/feed.json');
@@ -56,19 +71,25 @@ test('a valid empty collection publishes zero candidates', async t => {
 });
 test('the actual build emits only static files and removes unrelated runtime fields', async t => {
   const feed = snapshot(); feed.items[0].private_note = 'SYNTHETIC_PRIVATE_MARKER';
+  feed.items[0].published_at = new Date(Date.parse(feed.generated_at) - 86400000).toISOString();
   feed.collection = { succeeded: [channel.id], failed: [], private_note: 'SYNTHETIC_PRIVATE_MARKER' };
   feed.enrichment = { status: 'ready', private_note: 'SYNTHETIC_PRIVATE_MARKER' };
-  feed.items[0].analysis = { model: 'deepseek/deepseek-flash', basis: 'metadata', generated_at: feed.generated_at, title_zh: '一起玩拼图', summary: '简介介绍拼图互动，具体月龄未说明。', takeaways: ['先看原片。'], topics: ['fine_motor'], relevance: 'unclear', private_note: 'SYNTHETIC_PRIVATE_MARKER' };
-  const root = await buildFixture(t, { feed, channels: [{ ...channel, private_note: 'SYNTHETIC_PRIVATE_MARKER' }], private_notes: 'SYNTHETIC_PRIVATE_MARKER' });
+  feed.items[0].analysis = { model: 'deepseek/deepseek-flash', basis: 'metadata', generated_at: new Date(Date.parse(feed.generated_at) - 3600000).toISOString(), title_zh: '一起玩拼图', summary: '简介介绍拼图互动，具体月龄未说明。', takeaways: ['先看原片。'], topics: ['fine_motor'], relevance: 'unclear', private_note: 'SYNTHETIC_PRIVATE_MARKER' };
+  const root = await buildFixture(t, { feed, channels: [{ ...channel, private_note: 'SYNTHETIC_PRIVATE_MARKER' }], site_generated_at: '2000-01-01T00:00:00.000Z', private_notes: 'SYNTHETIC_PRIVATE_MARKER' });
   await writeFile(join(root, '.env'), 'SYNTHETIC_PRIVATE_MARKER');
   await writeFile(join(root, 'config.json'), 'SYNTHETIC_PRIVATE_MARKER');
   await mkdir(join(root, 'dist'));
   await writeFile(join(root, 'dist/private.json'), 'SYNTHETIC_PRIVATE_MARKER');
-  const result = build(root);
+  const before = Date.now(), result = build(root);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual((await readdir(join(root, 'dist'))).sort(), ['app.mjs', 'feed.json', 'feed.mjs', 'index.html', 'styles.css']);
   assert.equal((await readFile(join(root, 'dist/feed.json'), 'utf8')).includes('SYNTHETIC_PRIVATE_MARKER'), false);
-  assert.equal(JSON.parse(await readFile(join(root, 'dist/feed.json'), 'utf8')).feed.items[0].analysis.title_zh, '一起玩拼图');
+  const published = JSON.parse(await readFile(join(root, 'dist/feed.json'), 'utf8'));
+  assert.equal(published.feed.items[0].analysis.title_zh, '一起玩拼图');
+  assert.ok(Date.parse(published.site_generated_at) >= before && Date.parse(published.site_generated_at) <= Date.now());
+  assert.equal(published.feed.generated_at, feed.generated_at);
+  assert.equal(published.feed.items[0].published_at, feed.items[0].published_at);
+  assert.equal(published.feed.items[0].analysis.generated_at, feed.items[0].analysis.generated_at);
   const html = await readFile(join(root, 'dist/index.html'), 'utf8');
   for (const [, link] of html.matchAll(/(?:href|src)="([^"#][^"]*)"/g)) {
     if (/^https?:/.test(link)) continue;

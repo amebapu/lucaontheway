@@ -5,6 +5,19 @@ import config from '../config.json' with { type: 'json' };
 import { collectChannels, validateChannels, FeedError } from '../rss.mjs';
 import { parseFeed } from '../feed.mjs';
 
+export async function fetchRss(url, options) {
+  try {
+    const response = await fetch(url, options);
+    if (!response.ok) console.info(JSON.stringify({ source: 'youtube_rss', http_status: response.status }));
+    return response;
+  } catch (error) {
+    const known = ['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH', 'EPROTO', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_SOCKET', 'ERR_TLS_CERT_ALTNAME_INVALID', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'];
+    const code = error?.cause?.code || error?.code;
+    console.info(JSON.stringify({ source: 'youtube_rss', network_error: known.includes(code) ? code : error?.name === 'AbortError' ? 'ABORTED' : 'OTHER' }));
+    throw error;
+  }
+}
+
 export async function collectToFile(destination, channels, collect = collectChannels) {
   validateChannels(channels);
   const feed = { schema_version: 1, source: 'youtube', ...parseFeed(await collect(channels)) };
@@ -17,7 +30,7 @@ export async function collectToFile(destination, channels, collect = collectChan
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const state = await collectToFile('data/feed.json', config.channels);
+    const state = await collectToFile('data/feed.json', config.channels, channels => collectChannels(channels, fetchRss));
     console.log(`Collected ${state.feed.items.length} candidates at ${state.feed.generated_at}`);
   } catch (error) {
     console.error(`Collection failed: ${error instanceof FeedError ? error.code : 'collection_failed'}`);
