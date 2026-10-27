@@ -5,6 +5,10 @@
     {"id": "UCs_CXnifPUvP1zKIpgAYwqw", "name": "Emma Hubbard", "topics": ["movement", "fine_motor", "everyday"]},
     {"id": "UCa5A44a4rnjK0ykI8PLxdcA", "name": "The Artful Parent", "topics": ["art", "sensory", "everyday"]},
     {"id": "UCAAM-YUR69IX4a3gNsPwygQ", "name": "MOTHERCOULD", "topics": ["sensory", "art", "fine_motor", "everyday"]},
-    {"id": "UC0poUqIxO3uTYTw1zVgzeKw", "name": "Lovevery（品牌频道，含商品内容）", "topics": ["theory", "fine_motor", "reading", "everyday"]}
+    {"id": "UC0poUqIxO3uTYTw1zVgzeKw", "name": "Lovevery（品牌频道，含商品内容）", "topics": ["theory", "fine_motor", "reading", "everyday"]},
+    {"id": "UCqITx6MI21zh0MLPmPD2PHQ", "name": "Teach Me To Talk（含课程介绍）", "topics": ["language", "everyday", "theory"]},
+    {"id": "UCbVnfbuhpDdLt7K6y-Cqq1w", "name": "ZERO TO THREE（机构，含政策内容）", "topics": ["theory", "everyday"]},
+    {"id": "UCHW4HIU64kO3Ec_4Sovgcvw", "name": "The Hanen Centre（低频更新）", "topics": ["language", "reading", "everyday"]},
+    {"id": "UCzdFpM5xa7MVKR8EIV_B1FQ", "name": "Dr. Lauren Baker（低频，含婴儿内容）", "topics": ["movement", "fine_motor"]}
   ]
 }
