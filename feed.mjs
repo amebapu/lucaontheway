@@ -8,33 +8,33 @@ export const validVideoId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{11}$
 export const videoUrl = id => validVideoId(id) ? `https://www.youtube.com/watch?v=${id}` : '';
 
 function timestamp(value) {
-  if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(value)) throw new Error('日报时间格式不正确');
+  if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(value)) throw new Error('订阅时间格式不正确');
   const time = Date.parse(value);
-  if (!Number.isFinite(time)) throw new Error('日报时间格式不正确');
+  if (!Number.isFinite(time)) throw new Error('订阅时间格式不正确');
   return time;
 }
 
 function text(value, limit) {
-  if (typeof value !== 'string' || value.length > limit) throw new Error('日报文本格式不正确');
+  if (typeof value !== 'string' || value.length > limit) throw new Error('订阅文本格式不正确');
   return value;
 }
 
 export function assertFresh(value, now = Date.now()) {
   const time = timestamp(value);
-  if (time > now + CLOCK_SKEW) throw new Error('日报时间超前，请检查本机时钟');
-  if (now - time >= MAX_AGE) throw new Error('日报已超过 28 天，请重新采集并清理旧下载文件');
+  if (time > now + CLOCK_SKEW) throw new Error('订阅时间超前，请检查设备时钟');
+  if (now - time >= MAX_AGE) throw new Error('订阅已超过 28 天，请等待内容更新');
   return time;
 }
 
 export function parseFeed(raw, now = Date.now()) {
   if (!raw || raw.schema_version !== 1 || raw.source !== 'youtube' || !['discovery', 'channels'].includes(raw.mode) || !Array.isArray(raw.items) || raw.items.length > 40) {
-    throw new Error('请选择采集器生成的 feed.json；上传检查收据不是日报');
+    throw new Error('订阅数据格式不正确');
   }
   const generated = assertFresh(raw.generated_at, now);
   const unique = new Map();
   for (const item of raw.items) {
     if (!item || !validVideoId(item.id) || typeof item.channel_id !== 'string' || !/^UC[A-Za-z0-9_-]{22}$/.test(item.channel_id) || !Array.isArray(item.topics) || !item.topics.length || item.topics.some(t => !Object.hasOwn(TOPICS, t))) {
-      throw new Error('日报包含无效视频或主题');
+      throw new Error('订阅包含无效视频或主题');
     }
     const fetched = assertFresh(item.fetched_at, now);
     const published = timestamp(item.published_at);

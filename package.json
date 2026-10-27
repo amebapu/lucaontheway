@@ -4,12 +4,11 @@
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {
+    "collect": "node scripts/collect.mjs",
     "build": "node scripts/build.mjs",
-    "test": "node --test test_feed.mjs test_cloud.mjs",
-    "dev": "npm run build && wrangler dev --ip 127.0.0.1",
-    "deploy": "node scripts/check-config.mjs && npm run build && wrangler deploy",
-    "check": "npm test && npm run build && wrangler deploy --dry-run --outdir .wrangler/bundle"
+    "test": "node --test test_feed.mjs test_rss.mjs test_pages.mjs",
+    "dev": "npm run build && node scripts/serve.mjs",
+    "check": "node --check app.mjs && node --check scripts/serve.mjs && npm test"
   },
-  "dependencies": { "saxes": "6.0.0" },
-  "devDependencies": { "wrangler": "4.153.0", "miniflare": "5.20261023.0-beta" }
+  "dependencies": { "saxes": "6.0.0" }
 }

@@ -38,19 +38,17 @@ function render() {
 async function loadFeed() {
   const serial = ++latestRequest;
   try {
-    const response = await fetch('/api/feed', { cache: 'no-store', redirect: 'error' });
+    const response = await fetch('./feed.json', { cache: 'no-store', redirect: 'error' });
     if (!response.ok) throw new Error('订阅暂时不可用，请稍后刷新；精选来源仍可浏览。');
     const state = await response.json();
     if (serial !== latestRequest) return;
     const sources = $('#subscribed-channels'); sources.replaceChildren();
     for (const channel of state.channels) { const li = element('li'); li.append(link(channel.name, `https://www.youtube.com/channel/${channel.id}`), element('small', '', ` · ${channel.topics.map(t => TOPICS[t]).join(' / ')}`)); sources.append(li); }
     feed = state.feed ? parseFeed(state.feed) : null;
-    $('#status-dot').classList.toggle('ready', !!feed && state.refresh?.status === 'ok');
-    $('#status-text').textContent = feed ? '已载入最新内容' : '尚无有效订阅列表';
-    $('#status-detail').textContent = feed ? `上次更新：${new Date(feed.generated_at).toLocaleString('zh-CN', { hour12: false })} · 最近14天发布` : '尚未首次采集或旧列表已过期，可先浏览精选来源。';
-    $('#collection-detail').textContent = '每天北京时间约06:17更新频道。标题和简介按主题关键词初筛，月龄与具体做法仍需回源核对。';
-    if (state.refresh?.status === 'failed') { $('#status-text').textContent = feed ? '更新失败，保留上次有效列表' : '本次更新未成功'; $('#status-dot').classList.remove('ready'); $('#collection-detail').textContent = '上次更新未成功。持续失败请检查或替换频道；超过28天会停止展示旧列表。'; }
-    if (state.refresh?.status === 'running') $('#status-text').textContent = '订阅正在更新';
+    $('#status-dot').classList.toggle('ready', !!feed);
+    $('#status-text').textContent = feed ? '已载入订阅内容' : '尚无有效订阅列表';
+    $('#status-detail').textContent = feed ? `本批采集：${new Date(feed.generated_at).toLocaleString('zh-CN', { hour12: false })} · 最近14天发布` : '尚未首次采集或旧列表已过期，可先浏览精选来源。';
+    $('#collection-detail').textContent = '计划每天北京时间06:17更新，GitHub 排程可能延迟，以页面采集时间为准。更新失败时保留上次版本；超过28天停止展示旧列表。';
     render();
   } catch (error) {
     if (serial !== latestRequest) return;
