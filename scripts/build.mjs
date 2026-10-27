@@ -13,5 +13,5 @@ if (feed.collection) {
 await mkdir('dist', { recursive: true });
 for (const name of await readdir('dist')) await rm(`dist/${name}`, { recursive: true });
 for (const name of ['index.html', 'styles.css', 'app.mjs', 'feed.mjs']) await copyFile(name, `dist/${name}`);
-await writeFile('dist/feed.json', JSON.stringify({ feed, channels }) + '\n');
+await writeFile('dist/feed.json', JSON.stringify({ feed, channels, site_generated_at: new Date().toISOString() }) + '\n');
 console.log('Built 5 static files; source configuration and private runtime files excluded.');
