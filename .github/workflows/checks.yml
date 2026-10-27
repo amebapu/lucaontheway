@@ -29,8 +29,30 @@ jobs:
           package-manager-cache: false
       - run: npm ci --ignore-scripts
       - run: npm run check
+      - uses: actions/cache/restore@v5
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        continue-on-error: true
+        with:
+          path: data/ai-cache.json
+          key: parenting-ai-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: parenting-ai-v1-
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: '1'
       - run: npm run collect
         if: github.event_name != 'pull_request'
+      - run: npm run enrich -- --cache-only
+        if: github.event_name == 'push'
+      - run: npm run enrich
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        env:
+          AIHUB_API_KEY: ${{ secrets.AIHUB_API_KEY }}
+          AIHUB_ENDPOINT: ${{ secrets.AIHUB_ENDPOINT }}
+      - uses: actions/cache/save@v5
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && hashFiles('data/ai-cache.json') != ''
+        continue-on-error: true
+        with:
+          path: data/ai-cache.json
+          key: parenting-ai-v1-${{ github.run_id }}-${{ github.run_attempt }}
       - run: npm run build
         if: github.event_name != 'pull_request'
       - uses: actions/upload-pages-artifact@v4
