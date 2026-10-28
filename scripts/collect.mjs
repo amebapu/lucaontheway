@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import config from '../config.json' with { type: 'json' };
 import { collectChannels, validateChannels, FeedError } from '../rss.mjs';
 import { parseFeed } from '../feed.mjs';
+import { collectApiChannels } from './youtube-api.mjs';
 
 export async function fetchRss(url, options) {
   try {
@@ -30,7 +31,9 @@ export async function collectToFile(destination, channels, collect = collectChan
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const state = await collectToFile('data/feed.json', config.channels, channels => collectChannels(channels, fetchRss));
+    const apiKey = process.env.YOUTUBE_API_KEY?.trim() || '';
+    console.log(JSON.stringify({ collection_source: apiKey ? 'youtube_api' : 'rss' }));
+    const state = await collectToFile('data/feed.json', config.channels, channels => apiKey ? collectApiChannels(channels, apiKey) : collectChannels(channels, fetchRss));
     console.log(`Collected ${state.feed.items.length} candidates at ${state.feed.generated_at}`);
   } catch (error) {
     console.error(`Collection failed: ${error instanceof FeedError ? error.code : 'collection_failed'}`);
