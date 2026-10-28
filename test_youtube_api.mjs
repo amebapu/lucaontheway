@@ -32,15 +32,15 @@ function logs(t) {
   console.info = line => messages.push(JSON.parse(line)); t.after(() => { console.info = original; }); return messages;
 }
 
-test('four Beijing days search every recent topic daily and each classic topic twice and reject invalid configuration', () => {
+test('four Beijing days search every popular topic daily and each recent topic twice and reject invalid configuration', () => {
   const observed = new Map(), start = Date.parse('2026-10-27T16:00:00Z');
   for (let day = 0; day < 4; day++) {
     const selected = rotatingQueries(queries, start + day * 86400000);
-    assert.equal(selected.length, 12); assert.equal(selected.filter(query => query.order === 'date').length, 8);
+    assert.equal(selected.length, 12); assert.equal(selected.filter(query => query.order === 'date').length, 4);
     for (const query of selected) observed.set(query.topic, [...(observed.get(query.topic) || []), query.order]);
   }
   assert.equal(observed.size, 8);
-  for (const orders of observed.values()) { assert.equal(orders.filter(order => order === 'date').length, 4); assert.equal(orders.filter(order => order === 'viewCount').length, 2); }
+  for (const orders of observed.values()) { assert.equal(orders.filter(order => order === 'date').length, 2); assert.equal(orders.filter(order => order === 'viewCount').length, 4); }
   assert.notDeepEqual(rotatingQueries(queries, start - 1), rotatingQueries(queries, start));
   for (const invalid of [[], queries.slice(1), [...queries.slice(0, 7), queries[0]], queries.map((value, index) => index ? value : { ...value, query: 'x'.repeat(161) }), queries.map((value, index) => index ? value : { ...value, query: 'line\nbreak' })]) assert.throws(() => rotatingQueries(invalid), /queries_not_configured/);
   assert.equal(config.channels.length, 8); assert.ok(config.channels.every(value => !/Teach Me To Talk|Hanen/.test(value.name)));
@@ -68,7 +68,7 @@ test('twelve fixed searches and one deduplicated canonical request use a header 
     assert.equal(call.options.headers['x-goog-api-key'], KEY); assert.equal(call.options.redirect, 'manual'); assert.ok(call.options.signal instanceof AbortSignal);
     assert.equal(call.url.includes(KEY), false); assert.equal(new URL(call.url).searchParams.has('pageToken'), false);
   }
-  assert.deepEqual(state.feed.discovery, { total_queries: 12, successful_queries: 12, failed_queries: 0, recent_successful_queries: 8, popular_successful_queries: 4, recent_window_days: 90, unique_videos: 16, eligible_videos: 16, selected_videos: 16 });
+  assert.deepEqual(state.feed.discovery, { strategy: 'classic_first', total_queries: 12, successful_queries: 12, failed_queries: 0, recent_successful_queries: 4, popular_successful_queries: 8, recent_window_days: 90, unique_videos: 16, eligible_videos: 16, selected_videos: 16 });
   assert.equal(state.feed.items[0].published_at, row().snippet.publishedAt);
   assert.deepEqual(state.feed.items[0].popularity, { view_count: 1000, like_count: 12 });
   assert.equal(state.feed.items[0].duration_seconds, 123); assert.equal(JSON.stringify(state).includes(KEY), false);
@@ -242,11 +242,11 @@ test('the real CLI uses search only with a key and leaves prior data untouched o
 });
 
 
-test('daily discovery covers all eight recent directions and alternates four classic directions', () => {
+test('daily discovery covers all eight popular directions and alternates four recent directions', () => {
   const first = rotatingQueries(queries, NOW), second = rotatingQueries(queries, NOW + 86400000);
   assert.equal(first.length, 12);
-  assert.deepEqual(first.filter(value => value.order === 'date').map(value => value.topic), queries.map(value => value.topic));
-  const classics = [...first, ...second].filter(value => value.order === 'viewCount');
+  assert.deepEqual(first.filter(value => value.order === 'viewCount').map(value => value.topic), queries.map(value => value.topic));
+  const classics = [...first, ...second].filter(value => value.order === 'date');
   assert.equal(classics.length, 8); assert.equal(new Set(classics.map(value => value.topic)).size, 8);
 });
 
@@ -335,4 +335,28 @@ test('twelve stalled searches abort and leave no active requests after bounded r
     return new Response(body, { headers: { 'Content-Type': 'application/json' } });
   }), /upstream_timeout/);
   assert.equal(requests, 24); assert.equal(active, 0);
+});
+
+
+test('classic-first search covers all popular topics and alternates recent topics', () => {
+  const first = rotatingQueries(queries, NOW), second = rotatingQueries(queries, NOW + 86400000);
+  assert.equal(first.filter(value => value.order === 'viewCount').length, 8);
+  assert.equal(first.filter(value => value.order === 'date').length, 4);
+  assert.equal(new Set([...first, ...second].filter(value => value.order === 'date').map(value => value.topic)).size, 8);
+});
+
+test('classic-first reserves author slots so twenty recent authors cannot starve classics', async () => {
+  const rows = Array.from({ length: 40 }, (_, index) => {
+    const value = row(index, index); value.snippet.channelId = `UC${String(index).padStart(22, '0')}`;
+    if (index >= 24) { value.snippet.publishedAt = stamp(-1460 * 86400000); value.statistics.viewCount = '1000000'; }
+    return value;
+  });
+  const result = await collectDiscovery(queries, KEY, async url => {
+    const request = new URL(url);
+    if (request.pathname.endsWith('/search')) return json(search((request.searchParams.get('order') === 'date' ? rows.slice(0, 24) : rows.slice(24)).map(value => value.id)));
+    return json(videos(rows.filter(value => request.searchParams.get('id').split(',').includes(value.id))));
+  });
+  assert.equal(result.feed.items.filter(value => Date.parse(value.published_at) < NOW - 90 * 86400000).length, 15);
+  assert.equal(result.feed.items.length, 20); assert.equal(result.channels.length, 20);
+  assert.equal(result.feed.discovery.strategy, 'classic_first');
 });

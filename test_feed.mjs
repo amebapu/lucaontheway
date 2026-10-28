@@ -94,3 +94,37 @@ test('expanded discovery counts are whitelisted and agree with selected unique i
   for (const patch of [{ unique_videos: 301 }, { unique_videos: 59 }, { eligible_videos: 15 }, { selected_videos: 15 }, { selected_videos: 16.5 }, { successful_queries: 7, failed_queries: 5, recent_successful_queries: 4, popular_successful_queries: 3 }, { recent_successful_queries: 9, popular_successful_queries: 3 }]) assert.throws(() => parseFeed({ ...raw, discovery: { ...discovery, ...patch } }, NOW));
   assert.throws(() => parseFeed({ ...raw, items: [...items.slice(0, 15), items[0]] }, NOW), /数量/);
 });
+
+
+import * as feedLogic from './feed.mjs';
+test('curation separates uncertain and lower-heat recent items without a fixed view floor', () => {
+  assert.equal(typeof feedLogic.curateItems, 'function');
+  const relevant = { relevance: 'relevant', takeaways: [] }, unclear = { relevance: 'unclear', takeaways: [] };
+  const entries = [
+    item({ id: 'SYNTHETIC01', published_at: stamp(-1460 * 86400000), popularity: { view_count: 1000000 }, analysis: relevant }),
+    item({ id: 'SYNTHETIC02', published_at: stamp(-365 * 86400000), popularity: { view_count: 100 }, analysis: relevant }),
+    item({ id: 'SYNTHETIC03', popularity: { view_count: 10 }, analysis: relevant }),
+    item({ id: 'SYNTHETIC04', popularity: { view_count: 2000000 }, analysis: relevant }),
+    item({ id: 'SYNTHETIC05', popularity: { view_count: 99999999 }, analysis: unclear }),
+    item({ id: 'SYNTHETIC06' }),
+    item({ id: 'SYNTHETIC07', analysis: { relevance: 'low' } }),
+  ];
+  const shown = feedLogic.curateItems(entries, NOW);
+  assert.deepEqual(shown.recommended.map(value => value.id), ['SYNTHETIC01', 'SYNTHETIC02', 'SYNTHETIC04']);
+  assert.deepEqual(shown.pending.map(value => value.id), ['SYNTHETIC03', 'SYNTHETIC05', 'SYNTHETIC06']);
+  assert.equal(shown.referenceViews, 500050);
+  const noClassics = feedLogic.curateItems(entries.slice(2, 4), NOW);
+  assert.equal(noClassics.recommended.length, 2); assert.equal(noClassics.referenceViews, null);
+  const ranked = [...shown.recommended].sort(feedLogic.compareForRecommendation);
+  assert.deepEqual(ranked.map(value => value.id), ['SYNTHETIC04', 'SYNTHETIC01', 'SYNTHETIC02']);
+});
+
+
+test('classic-first coverage is explicit while older discovery snapshots remain readable', () => {
+  const items = Array.from({ length: 16 }, (_, index) => item({ id: `F${String(index).padStart(10, '0')}` }));
+  const discovery = { strategy: 'classic_first', total_queries: 12, successful_queries: 12, failed_queries: 0, recent_successful_queries: 4, popular_successful_queries: 8, recent_window_days: 90, unique_videos: 100, eligible_videos: 60, selected_videos: 16 };
+  assert.deepEqual(parseFeed({ ...feed(items), discovery }, NOW).discovery, discovery);
+  for (const patch of [{ strategy: 'unknown' }, { recent_successful_queries: 8, popular_successful_queries: 4 }, { recent_successful_queries: 3, popular_successful_queries: 9 }]) assert.throws(() => parseFeed({ ...feed(items), discovery: { ...discovery, ...patch } }, NOW), /检索/);
+  const { strategy, ...legacy } = discovery;
+  assert.equal(parseFeed({ ...feed(items), discovery: { ...legacy, recent_successful_queries: 8, popular_successful_queries: 4 } }, NOW).discovery.strategy, undefined);
+});
