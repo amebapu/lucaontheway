@@ -1,5 +1,5 @@
 import { FeedError, readTextLimited } from '../rss.mjs';
-import { TOPICS, CLOCK_SKEW, validVideoId, compareForDiscovery } from '../feed.mjs';
+import { TOPICS, CLOCK_SKEW, validVideoId, compareForDiscovery, isRecent } from '../feed.mjs';
 import { screenContent } from '../content.mjs';
 
 const TEMPORARY = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET']);
@@ -21,7 +21,7 @@ async function requestJson(resource, parameters, apiKey, deadline, fetcher) {
           throw new FeedError('upstream_format');
         }
         let text;
-        try { text = await readTextLimited(response.body, 256 * 1024); }
+        try { text = await readTextLimited(response.body, (resource === 'videos' ? 512 : 256) * 1024); }
         catch (error) {
           if (error instanceof FeedError || controller.signal.aborted || error?.name === 'AbortError' || error?.cause?.code || TEMPORARY.has(error?.code)) throw error;
           throw new FeedError('upstream_format');
@@ -55,11 +55,11 @@ async function requestJson(resource, parameters, apiKey, deadline, fetcher) {
 export function rotatingQueries(queries, now = Date.now()) {
   if (!Array.isArray(queries) || queries.length !== 8 || new Set(queries.map(value => value?.topic)).size !== 8 || new Set(queries.map(value => value?.query)).size !== 8 || queries.some(value => !value || !Object.hasOwn(TOPICS, value.topic) || typeof value.query !== 'string' || !value.query.trim() || value.query.length > 160 || /[\u0000-\u001f\u007f]/.test(value.query))) throw new FeedError('queries_not_configured');
   const day = Math.floor((now + 8 * 3600000) / 86400000);
-  return Array.from({ length: 4 }, (_, slot) => ({ ...queries[day % 2 + slot * 2], order: (Math.floor(day / 2) + slot) % 2 === 0 ? 'viewCount' : 'date' }));
+  return [...queries.map(query => ({ ...query, order: 'date' })), ...queries.filter((_, index) => index % 2 === day % 2).map(query => ({ ...query, order: 'viewCount' }))];
 }
 
 function searchIds(raw) {
-  if (raw?.kind !== 'youtube#searchListResponse' || Object.hasOwn(raw, 'error') || !Array.isArray(raw.items) || raw.items.length > 10) throw new FeedError('upstream_format');
+  if (raw?.kind !== 'youtube#searchListResponse' || Object.hasOwn(raw, 'error') || !Array.isArray(raw.items) || raw.items.length > 25) throw new FeedError('upstream_format');
   return raw.items.map(row => {
     if (row?.id?.kind !== 'youtube#video' || !validVideoId(row.id.videoId)) throw new FeedError('upstream_format');
     return row.id.videoId;
@@ -100,12 +100,13 @@ export async function collectDiscovery(queries, apiKey, fetcher = fetch) {
   const now = Date.now(), searchDeadline = now + 13000, overallDeadline = now + 26000;
   const selected = rotatingQueries(queries, now);
   const results = await Promise.allSettled(selected.map(async query => {
-    const parameters = { part: 'snippet', type: 'video', maxResults: '10', safeSearch: 'strict', relevanceLanguage: 'en', order: query.order, q: `${query.query} -autism -podcast -webinar -lecture -cartoon`, publishedBefore: new Date(now).toISOString(), fields: 'kind,items(id(kind,videoId))' };
+    const parameters = { part: 'snippet', type: 'video', maxResults: '25', safeSearch: 'strict', relevanceLanguage: 'en', order: query.order, q: `${query.query} -autism -podcast -webinar -lecture -cartoon`, publishedBefore: new Date(now).toISOString(), fields: 'kind,items(id(kind,videoId))' };
     if (query.order === 'date') parameters.publishedAfter = new Date(now - 90 * 86400000).toISOString();
     return searchIds(await requestJson('search', parameters, apiKey, searchDeadline, fetcher));
   }));
   const succeeded = results.filter(result => result.status === 'fulfilled').length;
   if (!succeeded) throw results[0].reason;
+  if (succeeded < 8) throw new FeedError('upstream_unavailable');
   const provenance = new Map();
   results.forEach((result, index) => {
     if (result.status !== 'fulfilled') return;
@@ -119,24 +120,35 @@ export async function collectDiscovery(queries, apiKey, fetcher = fetch) {
   let candidates = [];
   if (provenance.size) {
     const deadline = Math.min(overallDeadline, Date.now() + 13000);
-    const raw = await requestJson('videos', { part: 'snippet,contentDetails,status,statistics', id: [...provenance.keys()].join(','), fields: 'kind,items(id,snippet(title,description,channelId,channelTitle,publishedAt,liveBroadcastContent),contentDetails(duration,contentRating(ytRating)),status(privacyStatus),statistics(viewCount,likeCount))' }, apiKey, deadline, fetcher);
-    candidates = parseVideos(raw, provenance, now);
+    const ids = [...provenance.keys()], batches = [];
+    for (let offset = 0; offset < ids.length; offset += 25) batches.push(ids.slice(offset, offset + 25));
+    const videos = await Promise.allSettled(batches.map(async batch => {
+      const raw = await requestJson('videos', { part: 'snippet,contentDetails,status,statistics', id: batch.join(','), fields: 'kind,items(id,snippet(title,description,channelId,channelTitle,publishedAt,liveBroadcastContent),contentDetails(duration,contentRating(ytRating)),status(privacyStatus),statistics(viewCount,likeCount))' }, apiKey, deadline, fetcher);
+      return parseVideos(raw, new Map(batch.map(id => [id, provenance.get(id)])), now);
+    }));
+    const failed = videos.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
+    candidates = videos.flatMap(result => result.value);
     if (Date.now() >= deadline) throw new FeedError('upstream_timeout');
   }
-  const items = [], authors = new Map();
-  for (const item of candidates.sort(compareForDiscovery)) {
-    if (items.length >= 20) break;
-    if (!authors.has(item.channel_id) && authors.size >= 10) continue;
-    const author = authors.get(item.channel_id);
-    if (author?.count >= 2) continue;
-    if (!author) authors.set(item.channel_id, { id: item.channel_id, name: item.channel, topics: new Set(), count: 0 });
-    const accepted = authors.get(item.channel_id); accepted.count++; item.topics.forEach(topic => accepted.topics.add(topic));
-    items.push(item);
+  const recentItems = candidates.filter(item => isRecent(item, now)).sort(compareForDiscovery), classics = candidates.filter(item => !isRecent(item, now)).sort(compareForDiscovery);
+  const items = [], authors = new Map(), acceptedIds = new Set();
+  for (const [pool, target] of [[recentItems, 24], [classics, 16], [recentItems, 40], [classics, 40]]) {
+    let added = 0;
+    for (const item of pool) {
+      if (items.length >= 40 || added >= target) break;
+      if (acceptedIds.has(item.id) || (!authors.has(item.channel_id) && authors.size >= 20)) continue;
+      const author = authors.get(item.channel_id);
+      if (author?.count >= 2) continue;
+      if (!author) authors.set(item.channel_id, { id: item.channel_id, name: item.channel, topics: new Set(), count: 0 });
+      const accepted = authors.get(item.channel_id); accepted.count++; item.topics.forEach(topic => accepted.topics.add(topic));
+      items.push(item); acceptedIds.add(item.id); added++;
+    }
   }
-  if (succeeded < 4 && !items.length) throw new FeedError('upstream_unavailable');
+  if (items.length < 16) throw new FeedError('insufficient_candidates');
   const recent = results.filter((result, index) => result.status === 'fulfilled' && selected[index].order === 'date').length;
   return {
-    feed: { schema_version: 1, source: 'youtube', mode: 'discovery', generated_at: new Date(now).toISOString(), discovery: { total_queries: 4, successful_queries: succeeded, failed_queries: 4 - succeeded, recent_successful_queries: recent, popular_successful_queries: succeeded - recent, recent_window_days: 90 }, items },
+    feed: { schema_version: 1, source: 'youtube', mode: 'discovery', generated_at: new Date(now).toISOString(), discovery: { total_queries: 12, successful_queries: succeeded, failed_queries: 12 - succeeded, recent_successful_queries: recent, popular_successful_queries: succeeded - recent, recent_window_days: 90, unique_videos: provenance.size, eligible_videos: candidates.length, selected_videos: items.length }, items },
     channels: [...authors.values()].map(({ id, name, topics }) => ({ id, name, topics: [...topics] })),
   };
 }

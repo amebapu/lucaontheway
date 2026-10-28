@@ -75,3 +75,22 @@ test('play and explicit age precede popularity; missing counts differ from real 
   ];
   assert.deepEqual(ranked.sort(compareForDiscovery).map(value => value.id), ['SYNTHETIC05', 'SYNTHETIC04', 'SYNTHETIC03', 'SYNTHETIC02', 'SYNTHETIC01', 'SYNTHETIC06']);
 });
+
+
+test('publication period combines with topics and search against the fixed collection time', () => {
+  const recent = item({ id: 'SYNTHETIC01', title: 'Tape game', published_at: stamp(-90 * 86400000) });
+  const classic = item({ id: 'SYNTHETIC02', title: 'Tape game', published_at: stamp(-90 * 86400000 - 1), topics: ['art'] });
+  assert.deepEqual(filterItems([recent, classic], 'all', 'tape', 'recent', NOW).map(value => value.id), [recent.id]);
+  assert.deepEqual(filterItems([recent, classic], 'art', 'tape', 'classic', NOW).map(value => value.id), [classic.id]);
+  assert.deepEqual(filterItems([recent, classic], 'language', '', 'classic', NOW), []);
+});
+
+
+test('expanded discovery counts are whitelisted and agree with selected unique items', () => {
+  const items = Array.from({ length: 16 }, (_, index) => item({ id: `F${String(index).padStart(10, '0')}` }));
+  const discovery = { total_queries: 12, successful_queries: 12, failed_queries: 0, recent_successful_queries: 8, popular_successful_queries: 4, recent_window_days: 90, unique_videos: 100, eligible_videos: 60, selected_videos: 16 };
+  const raw = { ...feed(items), discovery: { ...discovery, private_note: 'SYNTHETIC_PRIVATE_MARKER' } };
+  assert.deepEqual(parseFeed(raw, NOW).discovery, discovery);
+  for (const patch of [{ unique_videos: 301 }, { unique_videos: 59 }, { eligible_videos: 15 }, { selected_videos: 15 }, { selected_videos: 16.5 }, { successful_queries: 7, failed_queries: 5, recent_successful_queries: 4, popular_successful_queries: 3 }, { recent_successful_queries: 9, popular_successful_queries: 3 }]) assert.throws(() => parseFeed({ ...raw, discovery: { ...discovery, ...patch } }, NOW));
+  assert.throws(() => parseFeed({ ...raw, items: [...items.slice(0, 15), items[0]] }, NOW), /数量/);
+});

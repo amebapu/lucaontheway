@@ -174,7 +174,14 @@ export async function enrichFeed(raw, { apiKey = '', endpoint = '', cache = {}, 
   const configured = !!apiKey && !!endpoint;
   let failure = null;
   const batches = [...captionPending];
-  for (let offset = 0; offset < pending.length; offset += 5) batches.push({ items: pending.slice(offset, offset + 5), caption: null });
+  for (let offset = 0; offset < pending.length;) {
+    let size = Math.min(8, pending.length - offset);
+    while (size > 1) {
+      try { makeRequest(pending.slice(offset, offset + size)); break; }
+      catch { size--; }
+    }
+    batches.push({ items: pending.slice(offset, offset + size), caption: null }); offset += size;
+  }
   if (!cacheOnly && configured) for (const batch of batches) {
     if (metrics.requests >= 8) break;
     const remaining = deadline - clock();

@@ -9,8 +9,8 @@ export class FeedError extends Error {
   constructor(code) { super(code); this.code = code; }
 }
 
-export function validateChannels(channels) {
-  if (!Array.isArray(channels) || !channels.length || channels.length > 10) throw new FeedError('channels_not_configured');
+export function validateChannels(channels, limit = 10) {
+  if (!Array.isArray(channels) || !channels.length || channels.length > limit) throw new FeedError('channels_not_configured');
   const ids = new Set();
   for (const channel of channels) {
     if (!channel || !/^UC[A-Za-z0-9_-]{22}$/.test(channel.id) || typeof channel.name !== 'string' || !channel.name || channel.name.length > 120 || !Array.isArray(channel.topics) || !channel.topics.length || channel.topics.some(t => !Object.hasOwn(TOPICS, t)) || ids.has(channel.id)) throw new FeedError('invalid_channel');
