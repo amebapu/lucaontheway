@@ -15,3 +15,5 @@ main{margin-left:226px;max-width:1660px;padding:0 48px}.topbar{display:flex;just
 .card-top{height:auto;min-height:58px;gap:12px;padding-block:12px}.card-top>span{min-width:0;overflow-wrap:anywhere}.card-top small{flex-shrink:0}
 .analysis-detail{font-size:11px;color:var(--muted);padding-top:12px}.ai-summary,.ai-points{font-size:13px;line-height:1.85;overflow-wrap:anywhere}.ai-points{padding-left:18px;margin:10px 0;color:#53664d}.original{margin-top:13px;border-top:1px solid var(--line);padding-top:10px;font-size:12px;color:var(--muted);overflow-wrap:anywhere}.original summary{cursor:pointer;color:var(--green)}.original p{margin-top:10px;white-space:pre-line}
 .play-note h4{font-size:12px;color:var(--ink);margin:14px 0 6px}.play-note ul,.play-note ol{padding-left:20px;margin:6px 0}.play-note li{margin:7px 0}.play-note .text-link{white-space:nowrap}
+.card-preview{display:block;width:100%;height:auto;aspect-ratio:16/9;object-fit:cover;background:var(--sage)}
+@media(max-width:760px){.search-links{grid-template-columns:1fr}.search-links a{padding:12px 14px}.search-links span{font-size:17px}.search-links small{margin-top:3px}}

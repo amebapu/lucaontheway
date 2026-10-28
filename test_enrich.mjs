@@ -120,6 +120,14 @@ test('fingerprints reuse unchanged analyses and invalidate changed source text',
   const bad = await enrichFeed(snapshot(), { cache: { version: 1, entries: { [fingerprint(item(0))]: { ...first.cache.entries[fingerprint(item(0))], model: 'other' } } }, now: NOW });
   assert.equal(bad.metrics.cache_hits, 0); assert.equal(bad.feed.enrichment.status, 'not_configured');
 });
+test('engagement changes do not alter model inputs or invalidate an otherwise reusable summary', async () => {
+  const original = item(0), popular = { ...original, popularity: { view_count: 90000, like_count: 1200 }, duration_seconds: 120, topic_basis: 'query' };
+  assert.deepEqual(makeRequest([popular]), makeRequest([original]));
+  assert.equal(fingerprint(popular), fingerprint(original));
+  const first = await enrichFeed(snapshot(), { apiKey: 'SYNTHETIC_SECRET', endpoint, now: NOW, fetcher });
+  const next = await enrichFeed({ ...snapshot(), items: [popular] }, { cache: first.cache, cacheOnly: true, now: NOW, fetcher: () => assert.fail('No additional model request') });
+  assert.equal(next.metrics.cache_hits, 1); assert.equal(next.metrics.requests, 0);
+});
 
 test('missing credentials and cache-only runs never call; failures stop later batches but retain successes', async () => {
   for (const options of [{}, { apiKey: 'SYNTHETIC_SECRET' }, { apiKey: 'SYNTHETIC_SECRET', endpoint, cacheOnly: true }]) {

@@ -1,4 +1,4 @@
-import { TOPICS, parseFeed, filterItems, assertFresh, videoUrl, captionUrl } from './feed.mjs';
+import { TOPICS, parseFeed, filterItems, assertFresh, videoUrl, captionUrl, thumbnailUrl, compareForDiscovery } from './feed.mjs';
 
 const $ = selector => document.querySelector(selector);
 let feed = null, channels = [], topic = 'all', latestRequest = 0;
@@ -38,7 +38,13 @@ function makeCard(item) {
   head.append(element('span', '', item.topics.map(t => TOPICS[t]).join(' · ')), element('small', '', 'YouTube'));
   const body = element('div', 'card-body');
   const analysis = item.analysis, channelName = channels.find(channel => channel.id === item.channel_id)?.name || item.channel;
+  const image = element('img', 'card-preview');
+  image.alt = `${item.title} · 原视频预览图`; image.loading = 'lazy'; image.decoding = 'async'; image.referrerPolicy = 'no-referrer'; image.width = 480; image.height = 270;
+  image.addEventListener('error', () => image.remove()); image.src = thumbnailUrl(item.id);
   body.append(element('h3', '', analysis?.title_zh || item.title), element('p', 'byline', channelName), element('p', 'byline', `作者发布：${beijingTime(item.published_at)}（北京时间）`));
+  const count = value => value === undefined ? '暂不可用' : value.toLocaleString('zh-CN');
+  body.append(element('p', 'byline', `${item.duration_seconds ? `时长 ${clockTime(item.duration_seconds)} · ` : ''}播放 ${count(item.popularity?.view_count)} · 赞 ${count(item.popularity?.like_count)}（本批快照）`));
+  if (item.topic_basis === 'query') body.append(element('p', 'card-flag', '主题按检索词推断，具体玩法与月龄待核对。'));
   if (analysis) {
     body.append(element('p', 'ai-summary', analysis.summary));
     if (analysis.takeaways.length) {
@@ -63,17 +69,19 @@ function makeCard(item) {
   }
   const actions = element('div', 'card-actions');
   actions.append(link('看原视频 ↗', videoUrl(item.id)), link('看这个频道 ↗', `https://www.youtube.com/channel/${item.channel_id}`));
-  body.append(actions); card.append(head, body); return card;
+  body.append(actions); card.append(image, head, body); return card;
 }
 function render() {
   fresh();
-  $('#feed-count').textContent = feed?.items.length || 0;
-  const items = filterItems(feed?.items || [], topic, $('#search').value);
+  const visible = filterItems(feed?.items || [], 'all', '');
+  $('#feed-count').textContent = visible.length;
+  const items = filterItems(visible, topic, $('#search').value).sort(compareForDiscovery);
   const cards = $('#cards'); cards.replaceChildren(...items.map(makeCard));
-  $('#result-count').textContent = `${items.length} 条内容 · 原视频阅读入口`;
-  const analyzed = feed?.items.filter(item => item.analysis).length || 0;
-  const subtitles = feed?.items.filter(item => item.analysis?.basis === 'captions').length || 0;
-  $('#analysis-detail').textContent = (analyzed ? `${analyzed}/${feed.items.length} 条已有中文速览 · 其中 ${subtitles} 条依据字幕，其余依据标题与简介。` : '中文速览尚未生成，当前显示原文；可先按主题筛选。') + (feed?.items.some(item => item.caption_status === 'not_configured') ? ' 字幕尚未接通。' : '');
+  $('#result-count').textContent = `${items.length} 条灵感 · 具体互动优先，同档参考热度`;
+  const analyzed = visible.filter(item => item.analysis).length;
+  const subtitles = visible.filter(item => item.analysis?.basis === 'captions').length;
+  const hidden = (feed?.items.length || 0) - visible.length;
+  $('#analysis-detail').textContent = (analyzed ? `${analyzed}/${visible.length} 条已有中文速览 · 其中 ${subtitles} 条依据字幕，其余依据标题与简介。` : visible.length ? '可见内容尚未生成中文速览，当前显示原文；可先按主题筛选。' : feed ? '本批没有可见推荐。' : '中文速览尚未生成。') + (hidden ? ` 已隐藏 ${hidden} 条AI低相关候选。` : '') + (visible.some(item => item.caption_status === 'not_configured') ? ' 字幕尚未接通。' : '');
   $('#empty').hidden = items.length > 0;
   $('#empty-title').textContent = feed ? '这次还没有匹配的内容' : '内容的位置，已经留好了';
   $('#empty-copy').textContent = feed ? '换个主题或关键词试试。\n没有合适的新内容时不凑数，也可以从精选来源继续看。' : '订阅更新后会在这里展示真实内容。\n先从精选来源寻找1—2岁陪伴的灵感。';
@@ -91,12 +99,13 @@ async function loadFeed() {
     $('#site-updated-at').textContent = `${siteTime} · 自动更新：每天北京时间06:17，排程可能延迟`;
     channels = state.channels;
     const sources = $('#subscribed-channels'); sources.replaceChildren();
+    $('#sources-heading').textContent = feed?.mode === 'discovery' ? '本批发现的作者' : '订阅频道';
     for (const channel of channels) { const li = element('li'), failed = feed?.collection?.failed.includes(channel.id); li.append(link(channel.name, `https://www.youtube.com/channel/${channel.id}`), element('small', '', ` · ${channel.topics.map(t => TOPICS[t]).join(' / ')}${failed ? ' · 本批未获取，旧条目暂不展示' : ''}`)); sources.append(li); }
     $('#status-dot').classList.toggle('ready', !!feed);
-    $('#status-text').textContent = feed ? (feed.collection?.failed.length ? '部分来源已更新' : '已载入订阅内容') : '尚无有效订阅列表';
-    const coverage = feed?.collection ? ` · ${feed.collection.succeeded.length}/${channels.length} 个来源已获取` : '';
-    $('#status-detail').textContent = feed ? `本批采集：${beijingTime(feed.generated_at)}（北京时间） · 最近14天发布${coverage}` : '尚未首次采集或旧列表已过期，可先浏览精选来源。';
-    $('#collection-detail').textContent = '计划每天北京时间06:17更新，GitHub 排程可能延迟。个别来源失败时更新其他来源，失败来源旧条目本批暂不展示；全部来源失败则保留上次网站，超过28天停止展示旧列表。';
+    $('#status-text').textContent = feed ? (feed.collection?.failed.length || feed.discovery?.failed_queries ? '部分检索已更新' : '已载入亲子灵感') : '尚无有效订阅列表';
+    const coverage = feed?.discovery ? ` · 近期检索 ${feed.discovery.recent_successful_queries}/2 · 热门检索 ${feed.discovery.popular_successful_queries}/2${feed.discovery.failed_queries ? ' · 本批查询不完整' : ''}` : feed?.collection ? ` · ${feed.collection.succeeded.length}/${channels.length} 个来源已获取` : '';
+    $('#status-detail').textContent = feed ? `本批采集：${beijingTime(feed.generated_at)}（北京时间） · ${feed.mode === 'discovery' ? '采集前90天近期 + 热门经典' : '最近14天发布'}${coverage}` : '尚未首次采集或旧列表已过期，可先浏览精选来源。';
+    $('#collection-detail').textContent = `计划每天北京时间06:17更新，GitHub 排程可能延迟。${feed?.mode === 'discovery' ? '每天轮转4个玩法主题检索，两天覆盖8个方向；近期检索限采集前90天，热门检索不限作者发布日期。每作者最多2条、最多10位作者与20条候选；经典可能重复，不保证每条都是新片。部分查询失败且没有合适内容时保留上次网站。' : '个别来源失败时更新其他来源，全部失败则保留上次网站。'} 超过28天停止展示旧列表。`;
     render();
   } catch (error) {
     if (serial !== latestRequest) return;

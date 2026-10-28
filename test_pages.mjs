@@ -123,3 +123,32 @@ test('the actual build keeps timestamped play notes while excluding transcript t
   assert.equal(text.includes('SYNTHETIC_RAW_TRANSCRIPT'), false);
   assert.deepEqual((await readdir(join(root, 'dist'))).sort(), ['app.mjs', 'feed.json', 'feed.mjs', 'index.html', 'styles.css']);
 });
+test('the actual build supports healthy empty discovery but rejects missing authors before clearing output', async t => {
+  const feed = { ...snapshot(), mode: 'discovery', items: [], discovery: { total_queries: 4, successful_queries: 4, failed_queries: 0, recent_successful_queries: 2, popular_successful_queries: 2, recent_window_days: 90 } };
+  const empty = await buildFixture(t, { feed, channels: [] });
+  assert.equal(build(empty).status, 0);
+  assert.deepEqual(JSON.parse(await readFile(join(empty, 'dist/feed.json'), 'utf8')).channels, []);
+  const mismatch = await buildFixture(t, { feed: { ...snapshot(), mode: 'discovery' }, channels: [{ ...channel, id: `UC${'B'.repeat(22)}` }] });
+  await mkdir(join(mismatch, 'dist')); await writeFile(join(mismatch, 'dist/index.html'), 'SYNTHETIC_PREVIOUS_SITE');
+  assert.notEqual(build(mismatch).status, 0); assert.equal(await readFile(join(mismatch, 'dist/index.html'), 'utf8'), 'SYNTHETIC_PREVIOUS_SITE');
+  const rss = await buildFixture(t, { feed: { ...snapshot(), items: [] }, channels: [] });
+  assert.notEqual(build(rss).status, 0);
+});
+test('preview policy adds only the image host without relaxing scripts or embedding video', async () => {
+  const html = await readFile(new URL('index.html', import.meta.url), 'utf8');
+  const csp = html.match(/Content-Security-Policy" content="([^"]+)"/)[1];
+  assert.match(csp, /img-src 'self' data: https:\/\/i\.ytimg\.com;/);
+  assert.match(csp, /script-src 'self';/); assert.match(csp, /connect-src 'self';/); assert.equal(csp.includes('unsafe-inline'), false);
+  assert.equal(/<iframe|onerror=/.test(html), false);
+});
+test('an all-low batch does not claim that summaries were never generated or originals are visible', async t => {
+  const root = await temporaryProject(t), feed = snapshot();
+  feed.items[0].analysis = { model: 'deepseek/deepseek-flash', basis: 'metadata', generated_at: feed.generated_at, title_zh: '课程介绍', summary: '这条候选是课程介绍，与亲子玩法相关度低。', takeaways: [], topics: ['everyday'], relevance: 'low' };
+  const script = `const nodes=new Map();\nconst element=()=>({textContent:'',value:'',children:[],classList:{toggle(){},remove(){}},append(...children){this.children.push(...children)},replaceChildren(...children){this.children=children},addEventListener(){},setAttribute(){}});\nglobalThis.document={querySelector(selector){if(!nodes.has(selector))nodes.set(selector,element());return nodes.get(selector)},querySelectorAll(){return []},createElement:element,addEventListener(){}};\nglobalThis.setInterval=()=>0;\nglobalThis.fetch=async()=>new Response(${JSON.stringify(JSON.stringify({ feed, channels: [channel], site_generated_at: feed.generated_at }))});\nawait import(${JSON.stringify(new URL('app.mjs', import.meta.url).href)});\nconsole.log(JSON.stringify({status:nodes.get('#analysis-detail').textContent,count:nodes.get('#feed-count').textContent,cards:nodes.get('#cards').children.length}));`;
+  await writeFile(join(root, 'render.mjs'), script);
+  const result = spawnSync(process.execPath, [join(root, 'render.mjs')], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const shown = JSON.parse(result.stdout);
+  assert.equal(String(shown.count), '0'); assert.equal(shown.cards, 0);
+  assert.match(shown.status, /已隐藏 1 条AI低相关/); assert.doesNotMatch(shown.status, /尚未生成|当前显示原文/);
+});

@@ -1,12 +1,13 @@
 export const TOPICS = {
   language: '语言互动', movement: '大运动', fine_motor: '精细动作', sensory: '感官盆',
-  art: '美育', reading: '绘本', everyday: '亲子游戏', theory: '早教理论',
+  art: '美育', reading: '绘本', everyday: '亲子游戏', theory: '陪伴方式',
 };
 export const MAX_AGE = 28 * 86400000;
 export const CLOCK_SKEW = 5 * 60000;
 export const CONTENT_MODEL = 'deepseek/deepseek-flash';
 export const validVideoId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{11}$/.test(id);
 export const videoUrl = id => validVideoId(id) ? `https://www.youtube.com/watch?v=${id}` : '';
+export const thumbnailUrl = id => validVideoId(id) ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : '';
 export const captionUrl = (id, seconds) => validVideoId(id) && Number.isSafeInteger(seconds) && seconds >= 0 && seconds <= 14400 ? `${videoUrl(id)}&t=${seconds}s` : '';
 
 function timestamp(value) {
@@ -73,6 +74,12 @@ export function parseFeed(raw, now = Date.now()) {
     throw new Error('订阅数据格式不正确');
   }
   const generated = assertFresh(raw.generated_at, now);
+  let discovery;
+  if (raw.discovery !== undefined) {
+    const value = raw.discovery;
+    if (raw.mode !== 'discovery' || !value || value.total_queries !== 4 || !Number.isInteger(value.successful_queries) || value.successful_queries < 1 || value.successful_queries > 4 || value.failed_queries !== 4 - value.successful_queries || ![value.recent_successful_queries, value.popular_successful_queries].every(count => Number.isInteger(count) && count >= 0 && count <= 2) || value.recent_successful_queries + value.popular_successful_queries !== value.successful_queries || value.recent_window_days !== 90) throw new Error('主题检索状态不正确');
+    discovery = { total_queries: 4, successful_queries: value.successful_queries, failed_queries: value.failed_queries, recent_successful_queries: value.recent_successful_queries, popular_successful_queries: value.popular_successful_queries, recent_window_days: 90 };
+  }
   let collection;
   if (raw.collection !== undefined) {
     const value = raw.collection;
@@ -88,13 +95,18 @@ export function parseFeed(raw, now = Date.now()) {
     }
     const fetched = assertFresh(item.fetched_at, now);
     const published = timestamp(item.published_at);
-    if (fetched > generated + CLOCK_SKEW || published > generated + CLOCK_SKEW || published < generated - 14 * 86400000 - CLOCK_SKEW) throw new Error('视频时间不在本次检索范围内');
+    if (fetched > generated + CLOCK_SKEW || published > generated + CLOCK_SKEW || (raw.mode === 'channels' && published < generated - 14 * 86400000 - CLOCK_SKEW)) throw new Error('视频时间不在本次检索范围内');
     const clean = {
       id: item.id, title: text(item.title, 300), description: text(item.description, 5000),
       channel: text(item.channel, 300), channel_id: item.channel_id,
       published_at: item.published_at, fetched_at: item.fetched_at, topics: [...new Set(item.topics)],
     };
     if (collection && !collection.succeeded.includes(clean.channel_id)) throw new Error('视频来源本批未获取');
+    if (item.topic_basis === 'query') clean.topic_basis = 'query';
+    if (Number.isSafeInteger(item.duration_seconds) && item.duration_seconds >= 1 && item.duration_seconds <= 1200) clean.duration_seconds = item.duration_seconds;
+    const popularity = {};
+    for (const name of ['view_count', 'like_count']) if (Number.isSafeInteger(item.popularity?.[name]) && item.popularity[name] >= 0) popularity[name] = item.popularity[name];
+    if (Object.keys(popularity).length) clean.popularity = popularity;
     if (['not_configured', 'available', 'unavailable', 'pending', 'error', 'not_selected'].includes(item.caption_status)) clean.caption_status = item.caption_status;
     if (item.analysis) {
       try {
@@ -107,6 +119,7 @@ export function parseFeed(raw, now = Date.now()) {
   }
   const feed = { generated_at: raw.generated_at, mode: raw.mode, items: [...unique.values()].sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at)) };
   if (collection) feed.collection = collection;
+  if (discovery) feed.discovery = discovery;
   if (['ready', 'partial', 'unavailable', 'not_configured', 'cache_only'].includes(raw.enrichment?.status)) feed.enrichment = { status: raw.enrichment.status };
   return feed;
 }
@@ -114,9 +127,15 @@ export function parseFeed(raw, now = Date.now()) {
 export function filterItems(items, topic, query) {
   const needle = query.trim().toLocaleLowerCase();
   return items.filter(item => {
+    if (item.analysis?.relevance === 'low') return false;
     const play = item.analysis?.play;
     const notes = play ? [play.age?.text || '', ...play.materials.map(point => point.text), ...play.steps.map(point => point.text), ...play.cautions.map(point => point.text)].join(' ') : '';
     return (topic === 'all' || item.topics.includes(topic)) && `${item.title} ${item.channel} ${item.description} ${item.analysis?.title_zh || ''} ${item.analysis?.summary || ''} ${item.analysis?.takeaways.join(' ') || ''} ${notes} ${item.topics.map(t => TOPICS[t]).join(' ')}`.toLocaleLowerCase().includes(needle);
   });
+}
+
+export function compareForDiscovery(a, b) {
+  const score = item => item.analysis?.relevance === 'low' ? -1 : Number(/\b(?:play|games?|activities|activity|DIY|sensory|painting|art|puzzle|obstacle|chores|turn[ -]taking|read[ -]aloud)\b/i.test(item.title)) * 2 + Number(/\b(?:one|two|1|2)[ -]year[ -]olds?\b|\b(?:1[2-9]|2[0-4])[ -]months?\b|1[—–-]2\s*岁|1[2-9]\s*个月|2[0-4]\s*个月/i.test(`${item.title} ${item.description.split('\n')[0].slice(0, 250)}`));
+  return score(b) - score(a) || (b.popularity?.view_count ?? -1) - (a.popularity?.view_count ?? -1) || (b.popularity?.like_count ?? -1) - (a.popularity?.like_count ?? -1) || Date.parse(b.published_at) - Date.parse(a.published_at) || a.id.localeCompare(b.id);
 }
 
