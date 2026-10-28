@@ -144,6 +144,23 @@ test('forty candidates share eight model calls and at most three new subtitle an
   assert.equal(result.feed.enrichment.status, 'partial');
   assert.ok(Object.keys(result.cache.entries).length <= 40);
 });
+test('twenty discovery candidates fit within seven model calls including three caption analyses', async () => {
+  const raw = { ...snapshot(20), mode: 'discovery' }, entries = {};
+  for (const entry of raw.items.slice(0, 3)) entries[entry.id] = normalizeCaptions(source, entry.id, NOW);
+  const result = await enrichFeed(raw, { apiKey: 'SYNTHETIC_KEY', endpoint: 'https://models.example.test/chat', now: NOW, captions: { version: 1, entries }, fetcher: model });
+  assert.equal(result.metrics.requests, 7); assert.equal(result.feed.items.filter(entry => entry.analysis?.basis === 'captions').length, 3);
+  assert.equal(result.feed.items.filter(entry => entry.analysis).length, 20);
+});
+test('caption retrieval favours short practical play over long promotional descriptions', async () => {
+  const raw = snapshot(4);
+  raw.items[0].title = 'Latest products'; raw.items[0].description = 'Long advertisement. '.repeat(30);
+  raw.items[1].title = 'Games for a 1-year-old'; raw.items[1].description = '';
+  raw.items[2].title = 'Play for a 1-year-old'; raw.items[2].description = ''; raw.items[2].popularity = { view_count: 100 };
+  raw.items[3].title = 'Painting for a 1-year-old'; raw.items[3].description = '';
+  const calls = [];
+  await collectCaptions(raw, { apiKey: 'SYNTHETIC_KEY', now: NOW, wait: async () => {}, fetcher: async id => { calls.push(id); return source; } });
+  assert.equal(calls[0], raw.items[2].id); assert.equal(calls.length, 3); assert.equal(calls.includes(raw.items[0].id), false);
+});
 
 test('an eight-day subtitle snapshot and analysis survive new retrieval priorities without downgrade', async () => {
   const old = NOW - 8 * 86400000, previousFeed = snapshot(1, old), caption = normalizeCaptions(source, item().id, old);

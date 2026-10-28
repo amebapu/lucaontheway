@@ -1,6 +1,9 @@
-const AGE_TARGET = /\btoddlers?\b|\b(?:one|two|1|2)[ -]year[ -]olds?\b|\b(?:1[2-9]|2[0-4])[ -]months?\b|1[—–-]2\s*岁|1[2-9]\s*个月|2[0-4]\s*个月/i;
-const OTHER_AGE = /\bnewborn\b|\btummy[ -]time\b|\bswaddl|\b(?:sit up|sit on their own|sitting up|roll over|rolling over)\b|\b(?:[0-9]|10|11)[ -]months?\b|\b(?:[3-9]|three|four|five)[ -]year[ -]olds?\b|新生儿|趴玩|襁褓|学坐|翻身/i;
+const AGE_TARGET = /\b(?:one|two|1|2)[ -]year[ -]olds?\b|\b(?:1|one)\s*(?:[—–-]|to)\s*(?:2|two)\s*years?\b|\b(?:1[2-9]|2[0-4])[ -]months?\b|1[—–-]2\s*岁|1[2-9]\s*个月|2[0-4]\s*个月/i;
+const OTHER_AGE = /\bnewborn\b|\btummy[ -]time\b|\bswaddl|\b(?:sit up|sit on their own|sitting up|roll over|rolling over)\b|\b(?:[0-9]|10|11)[ -]months?\b|\b(?:[0-9]|1[0-2])[ -]weeks?\b|\b(?:[3-9]|three|four|five)[ -]year[ -]olds?\b|新生儿|趴玩|襁褓|学坐|翻身/i;
 const SALES = /\b(?:discount|coupon|giveaway|black friday)\b|优惠码|折扣|抽奖/i;
+const OFF_TOPIC = /\b(?:autism|autistic|AAC|echolalia|CEUs?|webinar|lecture|podcast|keynote)\b|\b(?:clinical training|professional training|course enrollment|enroll in|course registration)\b|自闭症|诊疗课程|专业培训/i;
+const PROMOTION = /\b(?:limited[ -]edition|gift guide|product launch|toy review|brand collaboration|collab with)\b|新品发布|联名|好物开箱/i;
+const PASSIVE = /\b(?:nursery rhymes|cartoon|songs? compilation)\b|儿歌合集|动画合集/i;
 const TOPIC_RULES = {
   language: /\b(?:speech|talk|talking|language|communication|vocabulary|bilingual|words?)\b|语言|说话|双语|词汇/i,
   movement: /\b(?:gross motor|walking|walk|climbing|climb|balance|obstacle|movement|motor skills)\b|大运动|走路|攀爬|平衡|障碍/i,
@@ -12,13 +15,17 @@ const TOPIC_RULES = {
   theory: /\b(?:development|serve.?and.?return|child.?led|montessori|attachment|early learning)\b|早教|回应式|蒙台梭利|依恋|教育理念/i,
 };
 
-export function screenContent(item) {
+export function screenContent(item, queryTopics = []) {
   const title = item.title;
   const summary = item.description.split('\n')[0].slice(0, 250);
   const text = `${title} ${summary}`;
-  if (SALES.test(title) || (OTHER_AGE.test(title) && !AGE_TARGET.test(title))) return null;
+  const ageText = `${title} ${item.description.slice(0, 800)}`;
+  if (SALES.test(title) || PROMOTION.test(title) || OFF_TOPIC.test(text) || PASSIVE.test(title) || (OTHER_AGE.test(ageText) && !AGE_TARGET.test(ageText))) return null;
   const titleTopics = Object.entries(TOPIC_RULES).filter(([, rule]) => rule.test(title)).map(([topic]) => topic);
   const topics = titleTopics.length ? titleTopics : Object.entries(TOPIC_RULES).filter(([, rule]) => rule.test(text)).map(([topic]) => topic);
-  if (!topics.length) return null;
+  if (!topics.length) {
+    const fallback = [...new Set(queryTopics.filter(topic => Object.hasOwn(TOPIC_RULES, topic)))];
+    return fallback.length ? { ...item, topics: fallback, topic_basis: 'query' } : null;
+  }
   return { ...item, topics };
 }

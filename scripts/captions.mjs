@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { readFile, stat, mkdir, writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { assertFresh, parseFeed, parseCaptionProvenance, validVideoId } from '../feed.mjs';
+import { assertFresh, parseFeed, parseCaptionProvenance, validVideoId, compareForDiscovery } from '../feed.mjs';
 
 const CUE_BYTES = 12 * 1024;
 const SAFE_ERRORS = ['input_limit', 'authentication', 'rate_limit', 'unavailable', 'pending', 'upstream_http', 'payload_too_large', 'response_format', 'timeout', 'network'];
@@ -133,10 +133,7 @@ export async function collectCaptions(raw, { apiKey = '', cache = {}, cacheOnly 
       pending.push(item);
     }
   }
-  pending.sort((a, b) => {
-    const priority = item => Number(item.description.length >= 80) * 2 + Number(/toddler|\b(?:1[2-9]|2[0-4])\s*months|play|games?|activities/i.test(item.title));
-    return priority(b) - priority(a) || Date.parse(b.published_at) - Date.parse(a.published_at) || a.id.localeCompare(b.id);
-  });
+  pending.sort(compareForDiscovery);
   if (!cacheOnly && apiKey) for (const item of pending.slice(0, 3)) {
     if (deadline - clock() < requestMs + 1000) break;
     if (metrics.requests) await wait(1000);

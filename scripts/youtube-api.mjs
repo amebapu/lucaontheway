@@ -1,5 +1,5 @@
-import { assembleFeed, FeedError, readTextLimited, validateChannels } from '../rss.mjs';
-import { CLOCK_SKEW, validVideoId } from '../feed.mjs';
+import { FeedError, readTextLimited } from '../rss.mjs';
+import { TOPICS, CLOCK_SKEW, validVideoId, compareForDiscovery } from '../feed.mjs';
 import { screenContent } from '../content.mjs';
 
 const TEMPORARY = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET']);
@@ -52,42 +52,92 @@ async function requestJson(resource, parameters, apiKey, deadline, fetcher) {
   }
 }
 
-export function parseUploads(raw, channel, playlistId, now = Date.now()) {
-  if (raw?.kind !== 'youtube#playlistItemListResponse' || Object.hasOwn(raw, 'error') || !Array.isArray(raw.items) || raw.items.length > 15) throw new FeedError('upstream_format');
-  const items = [], fetched = new Date(now).toISOString();
+export function rotatingQueries(queries, now = Date.now()) {
+  if (!Array.isArray(queries) || queries.length !== 8 || new Set(queries.map(value => value?.topic)).size !== 8 || new Set(queries.map(value => value?.query)).size !== 8 || queries.some(value => !value || !Object.hasOwn(TOPICS, value.topic) || typeof value.query !== 'string' || !value.query.trim() || value.query.length > 160 || /[\u0000-\u001f\u007f]/.test(value.query))) throw new FeedError('queries_not_configured');
+  const day = Math.floor((now + 8 * 3600000) / 86400000);
+  return Array.from({ length: 4 }, (_, slot) => ({ ...queries[day % 2 + slot * 2], order: (Math.floor(day / 2) + slot) % 2 === 0 ? 'viewCount' : 'date' }));
+}
+
+function searchIds(raw) {
+  if (raw?.kind !== 'youtube#searchListResponse' || Object.hasOwn(raw, 'error') || !Array.isArray(raw.items) || raw.items.length > 10) throw new FeedError('upstream_format');
+  return raw.items.map(row => {
+    if (row?.id?.kind !== 'youtube#video' || !validVideoId(row.id.videoId)) throw new FeedError('upstream_format');
+    return row.id.videoId;
+  });
+}
+
+export function parseVideos(raw, provenance, now = Date.now()) {
+  if (raw?.kind !== 'youtube#videoListResponse' || Object.hasOwn(raw, 'error') || !Array.isArray(raw.items) || raw.items.length > provenance.size) throw new FeedError('upstream_format');
+  const seen = new Set(), items = [], fetched = new Date(now).toISOString();
   for (const row of raw.items) {
-    const privacy = row?.status?.privacyStatus;
+    if (!provenance.has(row?.id) || seen.has(row.id)) throw new FeedError('upstream_format');
+    seen.add(row.id);
+    const privacy = row.status?.privacyStatus;
     if (privacy === 'private' || privacy === 'unlisted') continue;
     if (privacy !== 'public') throw new FeedError('upstream_format');
     const snippet = row.snippet, details = row.contentDetails;
-    const published = typeof details?.videoPublishedAt === 'string' ? Date.parse(details.videoPublishedAt) : NaN;
-    if (snippet?.playlistId !== playlistId || snippet.channelId !== channel.id || (snippet.videoOwnerChannelId !== undefined && snippet.videoOwnerChannelId !== channel.id) || snippet.resourceId?.kind !== 'youtube#video' || !validVideoId(details?.videoId) || snippet.resourceId.videoId !== details.videoId || typeof snippet.title !== 'string' || !snippet.title.trim() || typeof snippet.description !== 'string' || !Number.isFinite(published) || published > now + CLOCK_SKEW) throw new FeedError('upstream_format');
-    if (published < now - 14 * 86400000) continue;
-    const candidate = screenContent({ id: details.videoId, channel_id: channel.id, channel: channel.name, title: snippet.title.slice(0, 300), description: snippet.description.slice(0, 800), published_at: new Date(published).toISOString(), fetched_at: fetched, topics: [...channel.topics] });
+    if (!['none', 'live', 'upcoming'].includes(snippet?.liveBroadcastContent)) throw new FeedError('upstream_format');
+    if (snippet.liveBroadcastContent !== 'none') continue;
+    const published = typeof snippet.publishedAt === 'string' ? Date.parse(snippet.publishedAt) : NaN;
+    const duration = typeof details?.duration === 'string' && /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(details.duration);
+    if (!/^UC[A-Za-z0-9_-]{22}$/.test(snippet.channelId) || typeof snippet.channelTitle !== 'string' || !snippet.channelTitle.trim() || typeof snippet.title !== 'string' || !snippet.title.trim() || typeof snippet.description !== 'string' || !Number.isFinite(published) || !duration || !duration.slice(1).some(value => value !== undefined)) throw new FeedError('upstream_format');
+    const seconds = Number(duration[1] || 0) * 3600 + Number(duration[2] || 0) * 60 + Number(duration[3] || 0);
+    if (!Number.isSafeInteger(seconds)) throw new FeedError('upstream_format');
+    const match = provenance.get(row.id);
+    if (seconds < 1 || seconds > 1200 || details.contentRating?.ytRating === 'ytAgeRestricted' || published > now + CLOCK_SKEW || (published < now - 90 * 86400000 && !match.popular)) continue;
+    const popularity = {};
+    for (const [field, name] of [['viewCount', 'view_count'], ['likeCount', 'like_count']]) {
+      const value = row.statistics?.[field];
+      if (typeof value === 'string' && /^\d+$/.test(value) && Number.isSafeInteger(Number(value))) popularity[name] = Number(value);
+    }
+    const candidate = screenContent({ id: row.id, channel_id: snippet.channelId, channel: snippet.channelTitle.slice(0, 120), title: snippet.title.slice(0, 300), description: snippet.description.slice(0, 800), published_at: new Date(published).toISOString(), fetched_at: fetched, duration_seconds: seconds, ...(Object.keys(popularity).length ? { popularity } : {}) }, [...match.topics]);
     if (candidate) items.push(candidate);
   }
   return items;
 }
 
-export async function collectApiChannels(channels, apiKey, fetcher = fetch) {
-  validateChannels(channels);
-  const now = Date.now(), mappingDeadline = now + 13000, overallDeadline = now + 26000;
-  const raw = await requestJson('channels', { part: 'contentDetails', id: channels.map(channel => channel.id).join(','), maxResults: '50' }, apiKey, mappingDeadline, fetcher);
-  if (raw?.kind !== 'youtube#channelListResponse' || Object.hasOwn(raw, 'error') || !Array.isArray(raw.items) || raw.items.length > channels.length) throw new FeedError('upstream_format');
-  const requested = new Set(channels.map(channel => channel.id)), seen = new Set(), uploads = new Map();
-  for (const row of raw.items) {
-    if (!requested.has(row?.id) || seen.has(row.id)) throw new FeedError('upstream_format');
-    seen.add(row.id);
-    const id = row.contentDetails?.relatedPlaylists?.uploads;
-    if (typeof id === 'string' && /^[A-Za-z0-9_-]{10,80}$/.test(id)) uploads.set(row.id, id);
-  }
-  if (Date.now() >= mappingDeadline) throw new FeedError('upstream_timeout');
-  const deadline = Math.min(overallDeadline, Date.now() + 13000);
-  const results = await Promise.allSettled(channels.map(async channel => {
-    if (!uploads.has(channel.id)) throw new FeedError('upstream_unavailable');
-    const playlistId = uploads.get(channel.id);
-    const body = await requestJson('playlistItems', { part: 'snippet,contentDetails,status', playlistId, maxResults: '15' }, apiKey, deadline, fetcher);
-    return parseUploads(body, channel, playlistId, now);
+export async function collectDiscovery(queries, apiKey, fetcher = fetch) {
+  const now = Date.now(), searchDeadline = now + 13000, overallDeadline = now + 26000;
+  const selected = rotatingQueries(queries, now);
+  const results = await Promise.allSettled(selected.map(async query => {
+    const parameters = { part: 'snippet', type: 'video', maxResults: '10', safeSearch: 'strict', relevanceLanguage: 'en', order: query.order, q: `${query.query} -autism -podcast -webinar -lecture -cartoon`, publishedBefore: new Date(now).toISOString(), fields: 'kind,items(id(kind,videoId))' };
+    if (query.order === 'date') parameters.publishedAfter = new Date(now - 90 * 86400000).toISOString();
+    return searchIds(await requestJson('search', parameters, apiKey, searchDeadline, fetcher));
   }));
-  return assembleFeed(channels, results, now);
+  const succeeded = results.filter(result => result.status === 'fulfilled').length;
+  if (!succeeded) throw results[0].reason;
+  const provenance = new Map();
+  results.forEach((result, index) => {
+    if (result.status !== 'fulfilled') return;
+    const query = selected[index];
+    for (const id of result.value) {
+      if (!provenance.has(id)) provenance.set(id, { topics: new Set(), popular: false });
+      const match = provenance.get(id); match.topics.add(query.topic); match.popular ||= query.order === 'viewCount';
+    }
+  });
+  if (Date.now() >= searchDeadline) throw new FeedError('upstream_timeout');
+  let candidates = [];
+  if (provenance.size) {
+    const deadline = Math.min(overallDeadline, Date.now() + 13000);
+    const raw = await requestJson('videos', { part: 'snippet,contentDetails,status,statistics', id: [...provenance.keys()].join(','), fields: 'kind,items(id,snippet(title,description,channelId,channelTitle,publishedAt,liveBroadcastContent),contentDetails(duration,contentRating(ytRating)),status(privacyStatus),statistics(viewCount,likeCount))' }, apiKey, deadline, fetcher);
+    candidates = parseVideos(raw, provenance, now);
+    if (Date.now() >= deadline) throw new FeedError('upstream_timeout');
+  }
+  const items = [], authors = new Map();
+  for (const item of candidates.sort(compareForDiscovery)) {
+    if (items.length >= 20) break;
+    if (!authors.has(item.channel_id) && authors.size >= 10) continue;
+    const author = authors.get(item.channel_id);
+    if (author?.count >= 2) continue;
+    if (!author) authors.set(item.channel_id, { id: item.channel_id, name: item.channel, topics: new Set(), count: 0 });
+    const accepted = authors.get(item.channel_id); accepted.count++; item.topics.forEach(topic => accepted.topics.add(topic));
+    items.push(item);
+  }
+  if (succeeded < 4 && !items.length) throw new FeedError('upstream_unavailable');
+  const recent = results.filter((result, index) => result.status === 'fulfilled' && selected[index].order === 'date').length;
+  return {
+    feed: { schema_version: 1, source: 'youtube', mode: 'discovery', generated_at: new Date(now).toISOString(), discovery: { total_queries: 4, successful_queries: succeeded, failed_queries: 4 - succeeded, recent_successful_queries: recent, popular_successful_queries: succeeded - recent, recent_window_days: 90 }, items },
+    channels: [...authors.values()].map(({ id, name, topics }) => ({ id, name, topics: [...topics] })),
+  };
 }
+
