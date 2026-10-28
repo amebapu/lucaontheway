@@ -151,6 +151,18 @@ test('twenty discovery candidates fit within six model calls including three cap
   assert.equal(result.metrics.requests, 6); assert.equal(result.feed.items.filter(entry => entry.analysis?.basis === 'captions').length, 3);
   assert.equal(result.feed.items.filter(entry => entry.analysis).length, 20);
 });
+test('invalid caption response items leave that item pending while later metadata batches continue', async () => {
+  const raw = snapshot(20), entries = {};
+  for (const entry of raw.items.slice(0, 3)) entries[entry.id] = normalizeCaptions(source, entry.id, NOW);
+  let calls = 0;
+  const result = await enrichFeed(raw, { apiKey: 'SYNTHETIC_KEY', endpoint: 'https://models.example.test/chat', now: NOW, captions: { version: 1, entries }, fetcher: async (...args) => ++calls === 3 ? new Response(JSON.stringify(response([]))) : model(...args) });
+  assert.equal(calls, 6); assert.equal(result.metrics.requests, 6);
+  assert.equal(result.failure, 'response_items'); assert.equal(result.feed.enrichment.status, 'partial');
+  assert.equal(result.feed.items.filter(entry => entry.analysis).length, 19);
+  assert.equal(result.feed.items.filter(entry => entry.analysis?.basis === 'captions').length, 2);
+  assert.equal(result.feed.items[2].analysis, undefined);
+  assert.equal(Object.keys(result.cache.entries).length, 19);
+});
 test('caption retrieval favours short practical play over long promotional descriptions', async () => {
   const raw = snapshot(4);
   raw.items[0].title = 'Latest products'; raw.items[0].description = 'Long advertisement. '.repeat(30);
