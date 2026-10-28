@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import config from '../config.json' with { type: 'json' };
 import { collectChannels, validateChannels, FeedError } from '../rss.mjs';
 import { parseFeed } from '../feed.mjs';
-import { collectApiChannels } from './youtube-api.mjs';
+import { collectDiscovery } from './youtube-api.mjs';
 
 export async function fetchRss(url, options) {
   try {
@@ -21,8 +21,12 @@ export async function fetchRss(url, options) {
 
 export async function collectToFile(destination, channels, collect = collectChannels) {
   validateChannels(channels);
-  const feed = { schema_version: 1, source: 'youtube', ...parseFeed(await collect(channels)) };
-  const state = { feed, channels: channels.map(({ id, name, topics }) => ({ id, name, topics })) };
+  return publishState(destination, { feed: await collect(channels), channels });
+}
+
+async function publishState(destination, raw) {
+  const feed = { schema_version: 1, source: 'youtube', ...parseFeed(raw.feed) };
+  const state = { feed, channels: raw.channels.map(({ id, name, topics }) => ({ id, name, topics })) };
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(`${destination}.tmp`, JSON.stringify(state) + '\n');
   await rename(`${destination}.tmp`, destination);
@@ -33,7 +37,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const apiKey = process.env.YOUTUBE_API_KEY?.trim() || '';
     console.log(JSON.stringify({ collection_source: apiKey ? 'youtube_api' : 'rss' }));
-    const state = await collectToFile('data/feed.json', config.channels, channels => apiKey ? collectApiChannels(channels, apiKey) : collectChannels(channels, fetchRss));
+    const state = apiKey ? await publishState('data/feed.json', await collectDiscovery(config.queries, apiKey)) : await collectToFile('data/feed.json', config.channels, channels => collectChannels(channels, fetchRss));
+    if (state.feed.discovery) console.log(JSON.stringify({ discovery: state.feed.discovery }));
     console.log(`Collected ${state.feed.items.length} candidates at ${state.feed.generated_at}`);
   } catch (error) {
     console.error(`Collection failed: ${error instanceof FeedError ? error.code : 'collection_failed'}`);

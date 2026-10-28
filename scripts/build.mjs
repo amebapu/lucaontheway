@@ -4,7 +4,8 @@ import { validateChannels } from '../rss.mjs';
 
 const state = JSON.parse(await readFile('data/feed.json', 'utf8'));
 const feed = { schema_version: 1, source: 'youtube', ...parseFeed(state.feed) };
-const channels = validateChannels(state.channels).map(({ id, name, topics }) => ({ id, name, topics }));
+const channels = feed.mode === 'discovery' && !feed.items.length && Array.isArray(state.channels) && !state.channels.length ? [] : validateChannels(state.channels).map(({ id, name, topics }) => ({ id, name, topics }));
+if (feed.items.some(item => !channels.some(channel => channel.id === item.channel_id))) throw new Error('视频作者不在本批来源中');
 if (feed.collection) {
   const ids = [...feed.collection.succeeded, ...feed.collection.failed];
   if (ids.length !== channels.length || channels.some(channel => !ids.includes(channel.id))) throw new Error('来源配置与更新状态不一致');
