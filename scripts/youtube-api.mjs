@@ -55,7 +55,7 @@ async function requestJson(resource, parameters, apiKey, deadline, fetcher) {
 export function rotatingQueries(queries, now = Date.now()) {
   if (!Array.isArray(queries) || queries.length !== 8 || new Set(queries.map(value => value?.topic)).size !== 8 || new Set(queries.map(value => value?.query)).size !== 8 || queries.some(value => !value || !Object.hasOwn(TOPICS, value.topic) || typeof value.query !== 'string' || !value.query.trim() || value.query.length > 160 || /[\u0000-\u001f\u007f]/.test(value.query))) throw new FeedError('queries_not_configured');
   const day = Math.floor((now + 8 * 3600000) / 86400000);
-  return [...queries.map(query => ({ ...query, order: 'date' })), ...queries.filter((_, index) => index % 2 === day % 2).map(query => ({ ...query, order: 'viewCount' }))];
+  return [...queries.map(query => ({ ...query, order: 'viewCount' })), ...queries.filter((_, index) => index % 2 === day % 2).map(query => ({ ...query, order: 'date' }))];
 }
 
 function searchIds(raw) {
@@ -133,22 +133,23 @@ export async function collectDiscovery(queries, apiKey, fetcher = fetch) {
   }
   const recentItems = candidates.filter(item => isRecent(item, now)).sort(compareForDiscovery), classics = candidates.filter(item => !isRecent(item, now)).sort(compareForDiscovery);
   const items = [], authors = new Map(), acceptedIds = new Set();
-  for (const [pool, target] of [[recentItems, 24], [classics, 16], [recentItems, 40], [classics, 40]]) {
+  for (const [pool, target, authorLimit] of [[classics, 30, 15], [recentItems, 10, 5], [classics, 40, 20], [recentItems, 40, 20]]) {
     let added = 0;
+    const poolAuthors = new Set();
     for (const item of pool) {
       if (items.length >= 40 || added >= target) break;
-      if (acceptedIds.has(item.id) || (!authors.has(item.channel_id) && authors.size >= 20)) continue;
+      if (acceptedIds.has(item.id) || (!authors.has(item.channel_id) && authors.size >= 20) || (!poolAuthors.has(item.channel_id) && poolAuthors.size >= authorLimit)) continue;
       const author = authors.get(item.channel_id);
       if (author?.count >= 2) continue;
       if (!author) authors.set(item.channel_id, { id: item.channel_id, name: item.channel, topics: new Set(), count: 0 });
       const accepted = authors.get(item.channel_id); accepted.count++; item.topics.forEach(topic => accepted.topics.add(topic));
-      items.push(item); acceptedIds.add(item.id); added++;
+      items.push(item); acceptedIds.add(item.id); poolAuthors.add(item.channel_id); added++;
     }
   }
   if (items.length < 16) throw new FeedError('insufficient_candidates');
   const recent = results.filter((result, index) => result.status === 'fulfilled' && selected[index].order === 'date').length;
   return {
-    feed: { schema_version: 1, source: 'youtube', mode: 'discovery', generated_at: new Date(now).toISOString(), discovery: { total_queries: 12, successful_queries: succeeded, failed_queries: 12 - succeeded, recent_successful_queries: recent, popular_successful_queries: succeeded - recent, recent_window_days: 90, unique_videos: provenance.size, eligible_videos: candidates.length, selected_videos: items.length }, items },
+    feed: { schema_version: 1, source: 'youtube', mode: 'discovery', generated_at: new Date(now).toISOString(), discovery: { strategy: 'classic_first', total_queries: 12, successful_queries: succeeded, failed_queries: 12 - succeeded, recent_successful_queries: recent, popular_successful_queries: succeeded - recent, recent_window_days: 90, unique_videos: provenance.size, eligible_videos: candidates.length, selected_videos: items.length }, items },
     channels: [...authors.values()].map(({ id, name, topics }) => ({ id, name, topics: [...topics] })),
   };
 }

@@ -1,13 +1,13 @@
 {
   "queries": [
-    {"topic": "sensory", "query": "1 year old DIY sensory play ideas at home"},
-    {"topic": "fine_motor", "query": "1 year old fine motor activities DIY"},
-    {"topic": "movement", "query": "toddler gross motor indoor games obstacle course"},
-    {"topic": "art", "query": "1 year old toddler process art activities"},
-    {"topic": "everyday", "query": "1 year old DIY parent child play ideas at home"},
-    {"topic": "language", "query": "toddler turn taking parent child language games"},
-    {"topic": "reading", "query": "toddler interactive picture book reading parent"},
-    {"topic": "theory", "query": "child led play toddler parent interaction demonstration"}
+    {"topic": "sensory", "query": "sensory activities for 1 year old"},
+    {"topic": "fine_motor", "query": "fine motor activities for 1 year old"},
+    {"topic": "movement", "query": "toddler gross motor activities"},
+    {"topic": "art", "query": "toddler painting activities"},
+    {"topic": "everyday", "query": "activities for 1 year old"},
+    {"topic": "language", "query": "toddler language games"},
+    {"topic": "reading", "query": "interactive reading toddlers"},
+    {"topic": "theory", "query": "toddler play ideas Montessori"}
   ],
   "channels": [
     {"id": "UCuwaJVAF2xhzH9MSi5YC24g", "name": "Raising Little Talkers", "topics": ["language", "reading", "everyday"]},

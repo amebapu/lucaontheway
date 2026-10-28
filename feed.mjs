@@ -77,9 +77,10 @@ export function parseFeed(raw, now = Date.now()) {
   const generated = assertFresh(raw.generated_at, now);
   let discovery;
   if (raw.discovery !== undefined) {
-    const value = raw.discovery;
-    if (raw.mode !== 'discovery' || !value || ![4, 12].includes(value.total_queries) || !Number.isInteger(value.successful_queries) || value.successful_queries < (value.total_queries === 12 ? 8 : 1) || value.successful_queries > value.total_queries || value.failed_queries !== value.total_queries - value.successful_queries || !Number.isInteger(value.recent_successful_queries) || value.recent_successful_queries < 0 || value.recent_successful_queries > (value.total_queries === 12 ? 8 : 2) || !Number.isInteger(value.popular_successful_queries) || value.popular_successful_queries < 0 || value.popular_successful_queries > (value.total_queries === 12 ? 4 : 2) || value.recent_successful_queries + value.popular_successful_queries !== value.successful_queries || value.recent_window_days !== 90) throw new Error('主题检索状态不正确');
+    const value = raw.discovery, classicFirst = value?.strategy === 'classic_first';
+    if (raw.mode !== 'discovery' || !value || (value.strategy !== undefined && (!classicFirst || value.total_queries !== 12)) || ![4, 12].includes(value.total_queries) || !Number.isInteger(value.successful_queries) || value.successful_queries < (value.total_queries === 12 ? 8 : 1) || value.successful_queries > value.total_queries || value.failed_queries !== value.total_queries - value.successful_queries || !Number.isInteger(value.recent_successful_queries) || value.recent_successful_queries < 0 || value.recent_successful_queries > (value.total_queries === 12 ? (classicFirst ? 4 : 8) : 2) || !Number.isInteger(value.popular_successful_queries) || value.popular_successful_queries < 0 || value.popular_successful_queries > (value.total_queries === 12 ? (classicFirst ? 8 : 4) : 2) || value.recent_successful_queries + value.popular_successful_queries !== value.successful_queries || value.recent_window_days !== 90) throw new Error('主题检索状态不正确');
     discovery = { total_queries: value.total_queries, successful_queries: value.successful_queries, failed_queries: value.failed_queries, recent_successful_queries: value.recent_successful_queries, popular_successful_queries: value.popular_successful_queries, recent_window_days: 90 };
+    if (classicFirst) discovery.strategy = 'classic_first';
     if (value.total_queries === 12) {
       if (![value.unique_videos, value.eligible_videos, value.selected_videos].every(count => Number.isInteger(count) && count >= 0) || value.unique_videos > 300 || value.eligible_videos > value.unique_videos || value.selected_videos > value.eligible_videos || value.selected_videos !== raw.items.length) throw new Error('本批数量不正确');
       Object.assign(discovery, { unique_videos: value.unique_videos, eligible_videos: value.eligible_videos, selected_videos: value.selected_videos });
@@ -139,6 +140,21 @@ export function filterItems(items, topic, query, period = 'all', reference = Dat
     const notes = play ? [play.age?.text || '', ...play.materials.map(point => point.text), ...play.steps.map(point => point.text), ...play.cautions.map(point => point.text)].join(' ') : '';
     return (topic === 'all' || item.topics.includes(topic)) && `${item.title} ${item.channel} ${item.description} ${item.analysis?.title_zh || ''} ${item.analysis?.summary || ''} ${item.analysis?.takeaways.join(' ') || ''} ${notes} ${item.topics.map(t => TOPICS[t]).join(' ')}`.toLocaleLowerCase().includes(needle);
   });
+}
+
+export function curateItems(items, reference) {
+  const visible = filterItems(items, 'all', '');
+  const relevant = visible.filter(item => item.analysis?.relevance === 'relevant');
+  const views = relevant.filter(item => !isRecent(item, reference)).map(item => item.popularity?.view_count).filter(Number.isSafeInteger).sort((a, b) => a - b);
+  const middle = Math.floor(views.length / 2);
+  const referenceViews = views.length ? (views.length % 2 ? views[middle] : (views[middle - 1] + views[middle]) / 2) : null;
+  const recommended = relevant.filter(item => !isRecent(item, reference) || referenceViews === null || (item.popularity?.view_count ?? -1) >= referenceViews);
+  const ids = new Set(recommended.map(item => item.id));
+  return { recommended, pending: visible.filter(item => !ids.has(item.id)), referenceViews };
+}
+
+export function compareForRecommendation(a, b) {
+  return Number(b.analysis?.relevance === 'relevant') - Number(a.analysis?.relevance === 'relevant') || (b.popularity?.view_count ?? -1) - (a.popularity?.view_count ?? -1) || (b.popularity?.like_count ?? -1) - (a.popularity?.like_count ?? -1) || Date.parse(b.published_at) - Date.parse(a.published_at) || a.id.localeCompare(b.id);
 }
 
 export function compareForDiscovery(a, b) {

@@ -173,7 +173,7 @@ test('discovery builds twenty authors while RSS keeps ten; visible sixteen is ch
 test('homepage counts actual AI-low items and combines recent, topic and Chinese filters', async t => {
   const root = await temporaryProject(t), base = snapshot(), reference = Date.parse(base.generated_at);
   const authors = Array.from({ length: 20 }, (_, index) => ({ ...channel, id: `UC${String.fromCharCode(65 + index).repeat(22)}`, name: `Synthetic author ${index}` }));
-  const items = Array.from({ length: 40 }, (_, index) => ({ ...base.items[0], id: `F${String(index).padStart(10, '0')}`, title: 'Play for a 1-year-old', channel_id: authors[index % 20].id, channel: authors[index % 20].name, topics: [index % 2 ? 'language' : 'art'], published_at: new Date(reference - (index < 20 ? 1 : 365) * 86400000).toISOString(), popularity: { view_count: index < 20 ? index : 1000000 + index }, analysis: { model: 'deepseek/deepseek-flash', basis: 'metadata', generated_at: base.generated_at, title_zh: `合成${index}亲子活动`, summary: '用胶带开展亲子游戏，具体月龄待核对。', takeaways: [], topics: [index % 2 ? 'language' : 'art'], relevance: index % 5 < 3 ? 'low' : 'unclear' } }));
+  const items = Array.from({ length: 40 }, (_, index) => ({ ...base.items[0], id: `F${String(index).padStart(10, '0')}`, title: 'Play for a 1-year-old', channel_id: authors[index % 20].id, channel: authors[index % 20].name, topics: [index % 2 ? 'language' : 'art'], published_at: new Date(reference - (index < 20 ? 1 : 365) * 86400000).toISOString(), popularity: { view_count: index < 20 ? index : 1000000 + index }, analysis: { model: 'deepseek/deepseek-flash', basis: 'metadata', generated_at: base.generated_at, title_zh: `合成${index}亲子活动`, summary: '用胶带开展亲子游戏，具体月龄待核对。', takeaways: [], topics: [index % 2 ? 'language' : 'art'], relevance: index % 5 < 3 ? 'low' : 'relevant' } }));
   const feed = { ...base, mode: 'discovery', discovery: { total_queries: 12, successful_queries: 12, failed_queries: 0, recent_successful_queries: 8, popular_successful_queries: 4, recent_window_days: 90, unique_videos: 300, eligible_videos: 100, selected_videos: 40 }, items };
   const script = `const nodes=new Map();
 const element=tagName=>({tagName,textContent:'',value:'',children:[],listeners:{},classList:{toggle(){},remove(){}},append(...children){this.children.push(...children)},replaceChildren(...children){this.children=children},addEventListener(name,callback){this.listeners[name]=callback},setAttribute(){}});
@@ -197,9 +197,22 @@ console.log(JSON.stringify({states,firstTitle}));`;
   const result = spawnSync(process.execPath, [join(root, 'render.mjs')], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   const observed = JSON.parse(result.stdout);
-  assert.deepEqual(observed.states.map(value => value.count), [16, 8, 4, 0, 4, 4, 16]);
-  assert.ok(observed.states.every(value => String(value.total) === '16'));
+  assert.deepEqual(observed.states.map(value => value.count), [8, 0, 0, 0, 0, 4, 8]);
+  assert.ok(observed.states.every(value => String(value.total) === '8'));
   assert.match(observed.states[0].batch, /检索去重 300 → 规则通过 100 → 本批入选 40/);
-  assert.match(observed.states[0].batch, /隐藏 24 条，可见 16 条.*近90天 8 \/ 经典 8/);
-  assert.equal(observed.firstTitle, '合成19亲子活动');
+  assert.match(observed.states[0].batch, /隐藏 24 条.*精选 8 条.*往期 8.*待看 8 条/);
+  assert.equal(observed.firstTitle, '合成39亲子活动');
+});
+
+
+test('classic-first build does not pad a small visible batch and preserves output when all are low', async t => {
+  const base = snapshot();
+  for (const low of [15, 16]) {
+    const feed = { ...base, mode: 'discovery', discovery: { strategy: 'classic_first', total_queries: 12, successful_queries: 12, failed_queries: 0, recent_successful_queries: 4, popular_successful_queries: 8, recent_window_days: 90, unique_videos: 16, eligible_videos: 16, selected_videos: 16 }, items: Array.from({ length: 16 }, (_, index) => ({ ...base.items[0], id: `F${String(index).padStart(10, '0')}`, ...(index < low ? { analysis: { model: 'deepseek/deepseek-flash', basis: 'metadata', generated_at: base.generated_at, title_zh: '合成课程', summary: '合成低相关，仅供验证。', takeaways: [], topics: ['language'], relevance: 'low' } } : {}) })) };
+    const root = await buildFixture(t, { feed, channels: [channel] });
+    await mkdir(join(root, 'dist')); await writeFile(join(root, 'dist/index.html'), 'SYNTHETIC_PREVIOUS_SITE');
+    const result = build(root);
+    if (low === 16) { assert.notEqual(result.status, 0); assert.match(result.stderr, /没有可见内容/); assert.equal(await readFile(join(root, 'dist/index.html'), 'utf8'), 'SYNTHETIC_PREVIOUS_SITE'); }
+    else { assert.equal(result.status, 0, result.stderr); assert.equal(JSON.parse(await readFile(join(root, 'dist/feed.json'), 'utf8')).feed.items.length, 16); }
+  }
 });
