@@ -140,15 +140,15 @@ test('forty candidates share eight model calls and at most three new subtitle an
     return model(url, options);
   } });
   assert.equal(subtitleCalls, 3); assert.equal(result.metrics.requests, 8);
-  assert.equal(result.feed.items.filter(entry => entry.analysis).length, 28);
-  assert.equal(result.feed.enrichment.status, 'partial');
+  assert.equal(result.feed.items.filter(entry => entry.analysis).length, 40);
+  assert.equal(result.feed.enrichment.status, 'ready');
   assert.ok(Object.keys(result.cache.entries).length <= 40);
 });
-test('twenty discovery candidates fit within seven model calls including three caption analyses', async () => {
+test('twenty discovery candidates fit within six model calls including three caption analyses', async () => {
   const raw = { ...snapshot(20), mode: 'discovery' }, entries = {};
   for (const entry of raw.items.slice(0, 3)) entries[entry.id] = normalizeCaptions(source, entry.id, NOW);
   const result = await enrichFeed(raw, { apiKey: 'SYNTHETIC_KEY', endpoint: 'https://models.example.test/chat', now: NOW, captions: { version: 1, entries }, fetcher: model });
-  assert.equal(result.metrics.requests, 7); assert.equal(result.feed.items.filter(entry => entry.analysis?.basis === 'captions').length, 3);
+  assert.equal(result.metrics.requests, 6); assert.equal(result.feed.items.filter(entry => entry.analysis?.basis === 'captions').length, 3);
   assert.equal(result.feed.items.filter(entry => entry.analysis).length, 20);
 });
 test('caption retrieval favours short practical play over long promotional descriptions', async () => {

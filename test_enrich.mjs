@@ -94,17 +94,17 @@ test('successful enrichment preserves source metadata, merges topics and keeps a
     const rows = JSON.parse(JSON.parse(options.body).messages[1].content).items.map(row => analysis(row.id, { relevance: 'low' }));
     return new Response(JSON.stringify(response(rows)));
   } });
-  assert.equal(calls, 2); assert.equal(result.metrics.requests, 2);
+  assert.equal(calls, 1); assert.equal(result.metrics.requests, 1);
   assert.equal(result.feed.items.length, 6); assert.equal(result.feed.enrichment.status, 'ready');
   assert.deepEqual(result.feed.items[0].topics, ['everyday', 'fine_motor']);
   assert.equal(result.feed.items[0].published_at, stamp);
-  assert.equal(result.metrics.reported_prompt_tokens, 246);
+  assert.equal(result.metrics.reported_prompt_tokens, 123);
   assert.equal(JSON.stringify(result.feed).includes('SYNTHETIC_SECRET'), false);
 });
 
 test('40 candidates use at most eight requests; empty feeds use none', async () => {
   const result = await enrichFeed(snapshot(40), { apiKey: 'SYNTHETIC_SECRET', endpoint, now: NOW, fetcher });
-  assert.equal(result.metrics.requests, 8); assert.equal(Object.keys(result.cache.entries).length, 40);
+  assert.equal(result.metrics.requests, 5); assert.equal(Object.keys(result.cache.entries).length, 40);
   const empty = await enrichFeed(snapshot(0), { apiKey: 'SYNTHETIC_SECRET', endpoint, now: NOW, fetcher: () => assert.fail('No request expected') });
   assert.equal(empty.metrics.requests, 0); assert.deepEqual(empty.feed.items, []);
 });
@@ -137,7 +137,7 @@ test('missing credentials and cache-only runs never call; failures stop later ba
   let calls = 0;
   const result = await enrichFeed(snapshot(12), { apiKey: 'SYNTHETIC_SECRET', endpoint, now: NOW, fetcher: async (...args) => ++calls === 1 ? fetcher(...args) : new Response('SYNTHETIC_PRIVATE_MARKER', { status: 401 }) });
   assert.equal(calls, 2); assert.equal(result.failure, 'authentication');
-  assert.equal(result.feed.items.length, 12); assert.equal(result.feed.items.filter(row => row.analysis).length, 5);
+  assert.equal(result.feed.items.length, 12); assert.equal(result.feed.items.filter(row => row.analysis).length, 8);
   assert.equal(result.feed.enrichment.status, 'partial'); assert.equal(result.metrics.usage_incomplete, true);
   assert.equal(JSON.stringify(result).includes('SYNTHETIC_PRIVATE_MARKER'), false);
 });
@@ -172,4 +172,39 @@ test('feed whitelist preserves valid optional analysis and collection; Chinese s
   for (const collection of [{ succeeded: [], failed: [channel] }, { succeeded: [channel], failed: [channel] }, { succeeded: [`UC${'B'.repeat(22)}`], failed: [channel] }]) assert.throws(() => parseFeed({ ...snapshot(), collection }, NOW));
   assert.equal(parseFeed(snapshot(), NOW).collection, undefined);
   assert.throws(() => parseAnalysis({ ...raw.items[0].analysis, relevance: 'unclear', generated_at: new Date(NOW + 600000).toISOString() }, NOW));
+});
+
+
+test('forty metadata entries fit in five requests without raising request or token limits', async () => {
+  const sizes = [];
+  const result = await enrichFeed(snapshot(40), { apiKey: 'SYNTHETIC_SECRET', endpoint, now: NOW, fetcher: async (url, options) => {
+    const body = JSON.parse(options.body); sizes.push(JSON.parse(body.messages[1].content).items.length);
+    assert.equal(body.max_tokens, 4096); assert.ok(Buffer.byteLength(options.body) <= 24 * 1024);
+    return fetcher(url, options);
+  } });
+  assert.deepEqual(sizes, [8, 8, 8, 8, 8]); assert.equal(result.metrics.requests, 5);
+  assert.equal(result.feed.items.filter(value => value.analysis).length, 40);
+});
+
+
+test('multi-byte metadata batches shrink within 24KiB without exceeding eight requests', async () => {
+  const raw = snapshot(40), sizes = [];
+  for (const entry of raw.items) { entry.title = '字'.repeat(300); entry.channel = '字'.repeat(300); entry.description = '字'.repeat(800); }
+  const result = await enrichFeed(raw, { apiKey: 'SYNTHETIC_SECRET', endpoint, now: NOW, fetcher: async (url, options) => {
+    assert.ok(Buffer.byteLength(options.body) <= 24 * 1024);
+    sizes.push(JSON.parse(JSON.parse(options.body).messages[1].content).items.length);
+    return fetcher(url, options);
+  } });
+  assert.ok(sizes.every(size => size < 8)); assert.ok(result.metrics.requests <= 8);
+  assert.equal(result.failure, null); assert.equal(result.feed.items.length, 40);
+});
+
+test('a truncated full eight-item response stops before any later model batch', async () => {
+  let calls = 0;
+  const result = await enrichFeed(snapshot(16), { apiKey: 'SYNTHETIC_SECRET', endpoint, now: NOW, fetcher: async (url, options) => {
+    calls++; assert.equal(JSON.parse(JSON.parse(options.body).messages[1].content).items.length, 8);
+    return new Response(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '{}' } }] }));
+  } });
+  assert.equal(calls, 1); assert.equal(result.failure, 'response_format');
+  assert.equal(result.feed.enrichment.status, 'unavailable'); assert.equal(result.feed.items.filter(value => value.analysis).length, 0);
 });
