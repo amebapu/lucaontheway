@@ -193,7 +193,7 @@ export async function enrichFeed(raw, { apiKey = '', endpoint = '', cache = {}, 
       }
     } catch (error) {
       failure = ['input_limit', 'endpoint_config', 'authentication', 'rate_limit', 'upstream_http', 'response_format', 'response_items', 'payload_too_large', 'timeout', 'network'].includes(error.message) ? error.message : 'enrichment_failed';
-      break;
+      if (failure !== 'response_items') break;
     }
   }
   for (const item of feed.items) {

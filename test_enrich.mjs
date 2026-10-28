@@ -142,6 +142,21 @@ test('missing credentials and cache-only runs never call; failures stop later ba
   assert.equal(JSON.stringify(result).includes('SYNTHETIC_PRIVATE_MARKER'), false);
 });
 
+test('invalid response items skip only their batch and do not block later metadata summaries', async () => {
+  let calls = 0;
+  const raw = snapshot(40);
+  const result = await enrichFeed(raw, { apiKey: 'SYNTHETIC_SECRET', endpoint, now: NOW, fetcher: async (...args) => ++calls === 2 ? new Response(JSON.stringify(response([]))) : fetcher(...args) });
+  assert.equal(calls, 5); assert.equal(result.metrics.requests, 5);
+  assert.equal(result.failure, 'response_items'); assert.equal(result.feed.enrichment.status, 'partial');
+  assert.equal(result.feed.items.filter(entry => entry.analysis).length, 32);
+  for (const entry of raw.items.slice(8, 16)) {
+    assert.equal(result.feed.items.find(value => value.id === entry.id).analysis, undefined);
+    assert.equal(result.cache.entries[fingerprint(entry)], undefined);
+  }
+  assert.equal(Object.keys(result.cache.entries).length, 32);
+  assert.equal(result.metrics.usage_incomplete, true);
+});
+
 test('endpoint, response size, redirect and timeout failures degrade without exposing raw errors', async () => {
   for (const invalid of ['http://models.example.test/chat', 'https://user:secret@models.example.test/chat', 'https://models.example.test/chat?secret=x', 'https://models.example.test/chat#x']) {
     const result = await enrichFeed(snapshot(), { apiKey: 'SYNTHETIC_SECRET', endpoint: invalid, now: NOW, fetcher: () => assert.fail('Invalid URL must not call') });
