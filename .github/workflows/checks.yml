@@ -48,7 +48,9 @@ jobs:
         env:
           SEGMENT_DOWNLOAD_TIMEOUT_MINS: '1'
       - run: npm run collect
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          YOUTUBE_API_KEY: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && secrets.YOUTUBE_API_KEY || '' }}
       - run: npm run captions -- --cache-only
         if: github.event_name == 'push'
       - run: npm run captions

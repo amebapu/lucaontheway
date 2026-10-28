@@ -118,10 +118,7 @@ async function fetchChannel(channel, now, deadline, fetcher) {
   }
 }
 
-export async function collectChannels(channels, fetcher = fetch) {
-  validateChannels(channels);
-  const now = Date.now(), deadline = now + 15000;
-  const results = await Promise.allSettled(channels.map(channel => fetchChannel(channel, now, deadline, fetcher)));
+export function assembleFeed(channels, results, now) {
   if (results.every(result => result.status === 'rejected')) throw results[0].reason;
   const collection = { succeeded: [], failed: [] }, groups = [];
   for (const [index, result] of results.entries()) {
@@ -139,4 +136,11 @@ export async function collectChannels(channels, fetcher = fetch) {
   const feed = { schema_version: 1, source: 'youtube', mode: 'channels', generated_at: new Date(now).toISOString(), collection, items };
   parseFeed(feed, now);
   return feed;
+}
+
+export async function collectChannels(channels, fetcher = fetch) {
+  validateChannels(channels);
+  const now = Date.now(), deadline = now + 15000;
+  const results = await Promise.allSettled(channels.map(channel => fetchChannel(channel, now, deadline, fetcher)));
+  return assembleFeed(channels, results, now);
 }
