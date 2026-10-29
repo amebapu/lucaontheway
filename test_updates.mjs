@@ -87,11 +87,9 @@ test('unsupported production branch, event and rerun are rejected before I/O', a
   await assert.rejects(restoreUpdates({ ...ctx, ref: 'refs/heads/feature' }, { token: 'SYNTHETIC_TOKEN', fetcher: () => assert.fail('No request expected') }), /updates_context/);
 });
 
-test('one-time bootstrap requires the exact initial main push and pre-calendar source SHA', () => {
-  assert.equal(bootstrapAllowed(ctx, event, run()), true);
-  for (const context of [{ ...ctx, event: 'schedule' }, { ...ctx, event: 'workflow_dispatch' }, { ...ctx, attempt: 2 }, { ...ctx, ref: 'refs/heads/feature' }]) assert.equal(bootstrapAllowed(context, event, run()), false);
-  for (const patch of [{ before: 'a'.repeat(40) }, { after: 'a'.repeat(40) }, { ref: 'refs/heads/feature' }]) assert.equal(bootstrapAllowed(ctx, { ...event, ...patch }, run()), false);
-  assert.equal(bootstrapAllowed(ctx, event, run(100, { head_sha: 'a'.repeat(40) })), false);
+test('bootstrap is permanently disabled after the initial release', () => {
+  assert.equal(BOOTSTRAP_PARENT_SHA, '');
+  for (const context of [ctx, { ...ctx, event: 'schedule' }, { ...ctx, event: 'workflow_dispatch' }]) assert.equal(bootstrapAllowed(context, event, run()), false);
 });
 
 test('matching deployed history restores with authentication only on the fixed GitHub origin', async () => {
@@ -127,13 +125,10 @@ test('observed history is never discarded when the next response is legacy or co
   }
 });
 
-test('legacy is retried and can initialize only once; stale legacy after calendar never resets', async () => {
+test('missing history is retried and then refused after initialization, never reset', async () => {
   let calls = 0; const waits = [];
-  const result = await restore(async url => { calls++; return reply(url.startsWith(RUNS_URL) ? { workflow_runs: [run()] } : page()); }, { wait: async ms => waits.push(ms) });
-  assert.equal(calls, 3); assert.deepEqual(waits, [2000]); assert.equal(result.bootstrap.before, BOOTSTRAP_PARENT_SHA);
-  for (const source of [run(100, { head_sha: 'a'.repeat(40) }), run()]) {
-    await assert.rejects(restore(async url => reply(url.startsWith(RUNS_URL) ? { workflow_runs: [source] } : page()), { event: { ...event, before: 'a'.repeat(40) } }), /updates_bootstrap/);
-  }
+  await assert.rejects(restore(async url => { calls++; return reply(url.startsWith(RUNS_URL) ? { workflow_runs: [run()] } : page()); }, { wait: async ms => waits.push(ms) }), /updates_bootstrap/);
+  assert.equal(calls, 3); assert.deepEqual(waits, [2000]);
   await assert.rejects(restore(async url => reply(url.startsWith(RUNS_URL) ? { workflow_runs: [run(100, { head_sha: 'a'.repeat(40) })] } : page())), /updates_bootstrap/);
 });
 
