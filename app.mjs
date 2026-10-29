@@ -1,11 +1,26 @@
-import { TOPICS, parseFeed, filterItems, assertFresh, videoUrl, captionUrl, thumbnailUrl, compareForRecommendation, curateItems, isRecent } from './feed.mjs';
+import { TOPICS, parseFeed, filterItems, assertFresh, videoUrl, captionUrl, thumbnailUrl, compareForRecommendation, curateItems, isRecent, parseUpdates, calendarWeek, beijingDay } from './feed.mjs';
 
 const $ = selector => document.querySelector(selector);
 let feed = null, channels = [], topic = 'all', period = 'all', selection = 'recommended', latestRequest = 0;
+let updates = null, updateStatus = 'loading';
 function element(tag, className, text) { const el = document.createElement(tag); if (className) el.className = className; if (text !== undefined) el.textContent = text; return el; }
 function link(label, href) { const el = element('a', 'text-link', label); el.href = href; el.target = '_blank'; el.rel = 'noopener noreferrer'; return el; }
 function beijingTime(value) { return new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }); }
 function clockTime(seconds) { const value = Math.floor(seconds); return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`; }
+function renderCalendar() {
+  const history = feed && updateStatus === 'ready' ? updates : null;
+  const days = calendarWeek(history), today = days.at(-1);
+  $('#calendar-days').replaceChildren(...days.map(day => {
+    const cell = element('li', `calendar-day${day.today ? ' today' : ''}`);
+    if (day.today) cell.setAttribute('aria-current', 'date');
+    const week = ['日', '一', '二', '三', '四', '五', '六'][new Date(`${day.date}T00:00:00Z`).getUTCDay()];
+    const date = element('time', '', day.date.slice(5).replace('-', '/')); date.dateTime = day.date;
+    cell.append(element('span', 'calendar-weekday', day.today ? '今天' : `周${week}`), date, element('strong', 'calendar-number', day.count === null ? '—' : String(day.count)), element('small', '', day.status === 'recorded' ? '新收录' : { unavailable: '待记录', unrecorded: '未记录', missed: '未更新', pending: '待更新' }[day.status]));
+    return cell;
+  }));
+  $('#today-new').textContent = history ? today.count === null ? '今天待更新' : `今天新收录 ${today.count} 条` : updateStatus === 'loading' ? '正在读取更新记录' : updateStatus === 'not_started' ? '更新记录尚未开始' : '更新记录暂不可用';
+  $('#calendar-note').textContent = history ? `从日历启用起，首次进入本站可见列表才计新增，同一视频不重复计数。${beijingDay(history.tracked_since) === beijingDay() ? `从 ${beijingTime(history.tracked_since)} 开始统计，已有 ${history.baseline_count} 条作为基线，不计新增。` : `按北京时间统计，记录始于 ${beijingDay(history.tracked_since).replaceAll('-', '/')}。`}` : updateStatus === 'loading' ? '新收录从日历启用时开始统计，同一视频不重复计数。' : updateStatus === 'not_started' ? '日历启用前没有历史统计，已有内容仍可阅读。' : '暂时无法读取更新记录，可先阅读已载入内容或查看页面下方的更新详情。';
+}
 function playNote(item, play) {
   const details = element('details', 'original play-note'); details.append(element('summary', '', '字幕里的玩法笔记'));
   const point = (tag, value) => { const line = element(tag, '', `${value.text} `); line.append(link(`原片 ${clockTime(value.start)} ↗`, captionUrl(item.id, value.start))); return line; };
@@ -75,6 +90,7 @@ function makeCard(item, waiting = false) {
 }
 function render() {
   fresh();
+  renderCalendar();
   const visible = filterItems(feed?.items || [], 'all', '');
   const reference = feed ? Date.parse(feed.generated_at) : Date.now();
   const curated = curateItems(visible, reference);
@@ -106,6 +122,10 @@ async function loadFeed() {
     const state = await response.json();
     if (serial !== latestRequest) return;
     feed = state.feed ? parseFeed(state.feed) : null;
+    updates = null; updateStatus = state.updates === undefined ? 'not_started' : 'unavailable';
+    if (state.updates !== undefined) {
+      try { updates = parseUpdates(state.updates); if (updates.last_built_at !== state.site_generated_at) throw new Error('updates_invalid'); updateStatus = 'ready'; } catch { /* Invalid history never becomes an invented zero. */ }
+    }
     let siteTime = '本站更新时间暂不可用';
     try { assertFresh(state.site_generated_at); siteTime = `本站更新：${beijingTime(state.site_generated_at)}（本批页面生成时间，北京时间）`; } catch { /* Older deployments may not include a page generation timestamp. */ }
     $('#site-updated-at').textContent = `${siteTime} · 自动更新：每天北京时间06:17，排程可能延迟`;
@@ -122,6 +142,7 @@ async function loadFeed() {
     render();
   } catch (error) {
     if (serial !== latestRequest) return;
+    if (!feed) updateStatus = 'unavailable';
     $('#status-text').textContent = '订阅连接不可用'; $('#status-detail').textContent = error instanceof SyntaxError ? '订阅数据格式不正确，请稍后刷新。' : error.message;
     $('#status-dot').classList.remove('ready'); render();
   }
@@ -134,5 +155,5 @@ document.querySelectorAll('[data-period]').forEach(el => el.addEventListener('cl
 document.querySelectorAll('[data-selection]').forEach(el => el.addEventListener('click', () => { selection = el.dataset.selection; document.querySelectorAll('[data-selection]').forEach(chip => { const selected = chip === el; chip.classList.toggle('selected', selected); chip.setAttribute('aria-pressed', String(selected)); }); render(); }));
 $('#search').addEventListener('input', render);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { render(); void loadFeed(); } });
-setInterval(() => { if (feed) { try { assertFresh(feed.generated_at); } catch { render(); } } }, 60000);
+setInterval(() => { if (feed) { try { assertFresh(feed.generated_at); renderCalendar(); } catch { render(); } } }, 60000);
 render(); await loadFeed();
