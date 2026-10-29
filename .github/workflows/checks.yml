@@ -17,6 +17,9 @@ concurrency:
 
 jobs:
   build:
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -47,6 +50,11 @@ jobs:
           restore-keys: parenting-captions-v1-
         env:
           SEGMENT_DOWNLOAD_TIMEOUT_MINS: '1'
+      - name: Restore update history
+        if: github.event_name != 'pull_request'
+        run: npm run updates
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: npm run collect
         if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:

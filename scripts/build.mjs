@@ -1,6 +1,7 @@
 import { mkdir, readdir, rm, copyFile, readFile, writeFile } from 'node:fs/promises';
-import { parseFeed, filterItems } from '../feed.mjs';
+import { parseFeed, filterItems, advanceUpdates } from '../feed.mjs';
 import { validateChannels } from '../rss.mjs';
+import { publicationContext, buildHistory } from './updates.mjs';
 
 const state = JSON.parse(await readFile('data/feed.json', 'utf8'));
 const feed = { schema_version: 1, source: 'youtube', ...parseFeed(state.feed) };
@@ -12,8 +13,13 @@ if (feed.collection) {
   if (ids.length !== channels.length || channels.some(channel => !ids.includes(channel.id))) throw new Error('来源配置与更新状态不一致');
 }
 
+const context = publicationContext(), previous = await buildHistory(context), siteTime = new Date().toISOString();
+const updates = advanceUpdates(previous, feed.items, siteTime, context?.run_id || 'preview');
+const published = JSON.stringify({ feed, channels, site_generated_at: siteTime, updates }) + '\n';
+if (Buffer.byteLength(published) > 1024 * 1024) throw new Error('Update history capacity reached; migration is required.');
+
 await mkdir('dist', { recursive: true });
 for (const name of await readdir('dist')) await rm(`dist/${name}`, { recursive: true });
 for (const name of ['index.html', 'styles.css', 'app.mjs', 'feed.mjs']) await copyFile(name, `dist/${name}`);
-await writeFile('dist/feed.json', JSON.stringify({ feed, channels, site_generated_at: new Date().toISOString() }) + '\n');
+await writeFile('dist/feed.json', published);
 console.log('Built 5 static files; source configuration and private runtime files excluded.');

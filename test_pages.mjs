@@ -26,8 +26,59 @@ async function buildFixture(t, state) {
   return root;
 }
 function build(root) {
-  return spawnSync(process.execPath, [fileURLToPath(new URL('scripts/build.mjs', import.meta.url))], { cwd: root, encoding: 'utf8' });
+  return spawnSync(process.execPath, [fileURLToPath(new URL('scripts/build.mjs', import.meta.url))], { cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'false' } });
 }
+
+test('homepage leads with a seven-day calendar and keeps operational details below both views', async () => {
+  const html = await readFile(new URL('index.html', import.meta.url), 'utf8');
+  const calendar = html.indexOf('id="update-calendar"'), details = html.indexOf('id="update-details"');
+  assert.ok(calendar >= 0 && calendar < html.indexOf('id="feed-view"'));
+  assert.ok(details > html.indexOf('id="sources-view"') && details < html.indexOf('<footer>'));
+  const opening = html.slice(html.lastIndexOf('<details', details), html.indexOf('>', details));
+  assert.doesNotMatch(opening, /\bopen\b/);
+  const body = html.slice(details, html.indexOf('</details>', details));
+  for (const id of ['status-text', 'status-detail', 'site-updated-at', 'batch-detail', 'analysis-detail']) assert.ok(body.includes(`id="${id}"`), id);
+});
+
+test('the actual build initializes existing visible IDs as a zero-new baseline', async t => {
+  const feed = snapshot();
+  feed.items.push({ ...feed.items[0], id: 'SYNTHETIC02', analysis: { model: 'deepseek/deepseek-flash', basis: 'metadata', generated_at: feed.generated_at, title_zh: '合成低相关', summary: '合成课程介绍。', takeaways: [], topics: ['language'], relevance: 'low' } });
+  const root = await buildFixture(t, { feed, channels: [channel] });
+  assert.equal(build(root).status, 0);
+  const published = JSON.parse(await readFile(join(root, 'dist/feed.json'), 'utf8'));
+  assert.ok(published.updates);
+  assert.equal(published.updates.baseline_count, 1);
+  assert.deepEqual(published.updates.seen_ids, ['SYNTHETIC01']);
+  assert.equal(published.updates.days.length, 1);
+  assert.equal(published.updates.days[0].new_count, 0);
+  assert.equal(published.updates.last_built_at, published.site_generated_at);
+});
+
+test('production without restored history fails before clearing the existing site', async t => {
+  const root = await buildFixture(t, { feed: snapshot(), channels: [channel] });
+  await mkdir(join(root, 'dist')); await writeFile(join(root, 'dist/index.html'), 'SYNTHETIC_PREVIOUS_SITE');
+  const env = { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'amebapu/lucaontheway', GITHUB_REF: 'refs/heads/main', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_RUN_ATTEMPT: '1', GITHUB_RUN_ID: '300', GITHUB_SHA: 'b'.repeat(40) };
+  for (const patch of [{}, { GITHUB_REF: 'refs/heads/feature' }, { GITHUB_RUN_ATTEMPT: '2' }]) {
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('scripts/build.mjs', import.meta.url))], { cwd: root, encoding: 'utf8', env: { ...env, ...patch } });
+    assert.notEqual(result.status, 0);
+    assert.equal(await readFile(join(root, 'dist/index.html'), 'utf8'), 'SYNTHETIC_PREVIOUS_SITE');
+  }
+});
+
+test('restored daily history survives the actual build while private inputs stay ignored and unpublished', async t => {
+  const feed = snapshot(), root = await buildFixture(t, { feed, channels: [channel] });
+  const { advanceUpdates } = await import('./feed.mjs');
+  const updates = advanceUpdates(null, feed.items, new Date(Date.now() - 1000).toISOString(), '100');
+  await writeFile(join(root, 'data/updates.json'), JSON.stringify({ updates: { ...updates, private_note: 'SYNTHETIC_PRIVATE_MARKER' } }));
+  await copyFile(new URL('.gitignore', import.meta.url), join(root, '.gitignore'));
+  assert.equal(spawnSync('git', ['-c', 'init.defaultBranch=main', 'init', '--quiet'], { cwd: root }).status, 0);
+  assert.equal(spawnSync('git', ['check-ignore', '--', 'data/updates.json'], { cwd: root }).status, 0);
+  assert.equal(build(root).status, 0);
+  const text = await readFile(join(root, 'dist/feed.json'), 'utf8'), next = JSON.parse(text).updates;
+  assert.equal(next.tracked_since, updates.tracked_since); assert.deepEqual(next.seen_ids, updates.seen_ids);
+  assert.equal(next.days.at(-1).new_count, 0); assert.equal(text.includes('SYNTHETIC_PRIVATE_MARKER'), false);
+  assert.deepEqual((await readdir(join(root, 'dist'))).sort(), ['app.mjs', 'feed.json', 'feed.mjs', 'index.html', 'styles.css']);
+});
 
 test('RSS failure diagnostics expose only HTTP status or a fixed network error type', async t => {
   const originalFetch = globalThis.fetch, originalInfo = console.info, messages = [];

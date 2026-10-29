@@ -162,3 +162,50 @@ export function compareForDiscovery(a, b) {
   return score(b) - score(a) || (b.popularity?.view_count ?? -1) - (a.popularity?.view_count ?? -1) || (b.popularity?.like_count ?? -1) - (a.popularity?.like_count ?? -1) || Date.parse(b.published_at) - Date.parse(a.published_at) || a.id.localeCompare(b.id);
 }
 
+export function beijingDay(value = Date.now()) {
+  return new Date((typeof value === 'number' ? value : timestamp(value)) + 8 * 3600000).toISOString().slice(0, 10);
+}
+
+function weekDates(now) {
+  const today = Date.parse(`${beijingDay(now)}T00:00:00Z`);
+  return Array.from({ length: 7 }, (_, index) => new Date(today - (6 - index) * 86400000).toISOString().slice(0, 10));
+}
+
+export function parseUpdates(raw, now = Date.now(), production = false) {
+  const fail = () => { throw new Error('updates_invalid'); };
+  if (!raw || raw.version !== 1 || !Array.isArray(raw.seen_ids) || raw.seen_ids.length > 50000 || raw.seen_ids.some(id => !validVideoId(id)) || new Set(raw.seen_ids).size !== raw.seen_ids.length) fail();
+  const started = timestamp(raw.tracked_since), built = timestamp(raw.last_built_at);
+  if (started > built || built > now + CLOCK_SKEW || !Number.isSafeInteger(raw.baseline_count) || raw.baseline_count < 0 || raw.baseline_count > raw.seen_ids.length) fail();
+  if (typeof raw.release_run_id !== 'string' || !(/^[1-9]\d{0,15}$/.test(raw.release_run_id) || (!production && raw.release_run_id === 'preview')) || raw.release_run_attempt !== 1) fail();
+  if (!Array.isArray(raw.days) || !raw.days.length || raw.days.length > 7) fail();
+  const first = weekDates(built)[0], last = beijingDay(built), start = beijingDay(started), days = [];
+  let total = 0;
+  for (const row of raw.days) {
+    if (!row || typeof row.date !== 'string' || !/^\d{4}-\d\d-\d\d$/.test(row.date) || !Number.isFinite(Date.parse(`${row.date}T00:00:00Z`)) || new Date(`${row.date}T00:00:00Z`).toISOString().slice(0, 10) !== row.date || row.date < first || row.date < start || row.date > last || (days.length && row.date <= days.at(-1).date) || !Number.isSafeInteger(row.new_count) || row.new_count < 0 || row.new_count > 50000) fail();
+    total += row.new_count; days.push({ date: row.date, new_count: row.new_count });
+  }
+  if (days.at(-1).date !== last || total > raw.seen_ids.length - raw.baseline_count) fail();
+  return { version: 1, tracked_since: new Date(started).toISOString(), last_built_at: new Date(built).toISOString(), baseline_count: raw.baseline_count, seen_ids: [...raw.seen_ids], days, release_run_id: raw.release_run_id, release_run_attempt: 1 };
+}
+
+export function advanceUpdates(previous, items, at = new Date().toISOString(), runId = 'preview') {
+  const now = timestamp(at), current = [...new Set(filterItems(items, 'all', '').map(item => item.id))];
+  if (current.some(id => !validVideoId(id))) throw new Error('updates_invalid');
+  const old = previous === null ? null : parseUpdates(previous, now);
+  if (old && timestamp(old.last_built_at) > now) throw new Error('updates_clock');
+  const seen = new Set(old?.seen_ids || current), counts = new Map(old?.days.map(day => [day.date, day.new_count]));
+  let added = 0;
+  for (const id of current) if (!seen.has(id)) { seen.add(id); added++; }
+  if (seen.size > 50000) throw new Error('updates_capacity');
+  const day = beijingDay(now); counts.set(day, (counts.get(day) || 0) + added);
+  const first = weekDates(now)[0];
+  return parseUpdates({ version: 1, tracked_since: old?.tracked_since || at, last_built_at: at, baseline_count: old?.baseline_count ?? current.length, seen_ids: [...seen].sort(), days: [...counts].filter(([date]) => date >= first).sort(([a], [b]) => a.localeCompare(b)).map(([date, new_count]) => ({ date, new_count })), release_run_id: runId, release_run_attempt: 1 }, now);
+}
+
+export function calendarWeek(updates, now = Date.now()) {
+  return weekDates(now).map((date, index) => {
+    const record = updates?.days.find(day => day.date === date);
+    return { date, today: index === 6, count: record?.new_count ?? null, status: !updates ? 'unavailable' : record ? 'recorded' : date < beijingDay(updates.tracked_since) ? 'unrecorded' : index === 6 ? 'pending' : 'missed' };
+  });
+}
+
