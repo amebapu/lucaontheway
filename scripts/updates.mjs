@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { parseUpdates, parseFeed, CLOCK_SKEW } from '../feed.mjs';
 
-export const BOOTSTRAP_PARENT_SHA = '560e7657dc4bf8bc86da1eb36160bf9adf4ec27f';
+export const BOOTSTRAP_PARENT_SHA = '';
 export const REPOSITORY = 'amebapu/lucaontheway';
 export const PAGE_FEED_URL = 'https://amebapu.github.io/lucaontheway/feed.json';
 export const RUNS_URL = `https://api.github.com/repos/${REPOSITORY}/actions`;
