@@ -1,7 +1,8 @@
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { parseUpdates, parseFeed, CLOCK_SKEW } from '../feed.mjs';
+import { parseUpdates, parseFeed, parsePublication, CLOCK_SKEW } from '../feed.mjs';
 import { parseArchiveManifest } from '../archive.mjs';
+import { MAX_HISTORY_BYTES, MAX_PUBLICATION_BYTES, MAX_HANDOFF_BYTES } from '../capacity.mjs';
 
 export const BOOTSTRAP_PARENT_SHA = '';
 export const REPOSITORY = 'amebapu/lucaontheway';
@@ -34,17 +35,18 @@ function runInfo(raw) {
 
 function previousPublication(body, source, now) {
   try {
+    const context = parsePublication(body, now, true);
     const generated = Date.parse(body.site_generated_at);
     const feed = { schema_version: 1, source: 'youtube', ...parseFeed(body.feed, generated) };
     const archive_present = Object.hasOwn(body, 'archive');
-    return { run_id: source.id, head_sha: source.head_sha, site_generated_at: body.site_generated_at, feed, archive_present, ...(archive_present ? { archive: parseArchiveManifest(body.archive, now, true) } : {}) };
+    return { run_id: source.id, head_sha: source.head_sha, site_generated_at: body.site_generated_at, history_status: context.publication?.history_status || 'current', ...(context.publication?.capacity_reason ? { capacity_reason: context.publication.capacity_reason } : {}), feed, archive_present, ...(archive_present ? { archive: parseArchiveManifest(body.archive, now, true) } : {}) };
   } catch { throw new Error('updates_source_invalid'); }
 }
 
 export function restoredFiles(result) {
   const { previous_publication, ...history } = result;
   const updates = JSON.stringify(history) + '\n', publication = JSON.stringify({ run_id: result.run_id, previous_publication }) + '\n';
-  if (Buffer.byteLength(updates) > 1024 * 1024 || Buffer.byteLength(publication) > 2 * 1024 * 1024) throw new Error('updates_size');
+  if (Buffer.byteLength(updates) > MAX_HISTORY_BYTES || Buffer.byteLength(publication) > MAX_HANDOFF_BYTES) throw new Error('updates_size');
   return { updates, publication };
 }
 
@@ -86,20 +88,26 @@ export async function restoreUpdates(context, { token, event = null, fetcher = f
   }
   const source = successful.sort((a, b) => b.updated - a.updated)[0];
   if (!source) throw new Error('updates_source_invalid');
-  let previous = null, previousBody = null;
+  let previous = null, previousBody = null, previousContext = null, previousIdentity = null;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const body = await get(`${PAGE_FEED_URL}?calendar_run=${context.run_id}&try=${attempt + 1}`, { 'Cache-Control': 'no-cache' }, 1024 * 1024);
+    const body = await get(`${PAGE_FEED_URL}?calendar_run=${context.run_id}&try=${attempt + 1}`, { 'Cache-Control': 'no-cache' }, MAX_PUBLICATION_BYTES);
     if (!body || typeof body !== 'object' || !body.feed || typeof body.site_generated_at !== 'string') throw new Error('updates_source_invalid');
-    const legacy = body.updates === undefined, candidate = legacy ? null : parseUpdates(body.updates, now, true);
-    if (candidate && candidate.last_built_at !== body.site_generated_at) throw new Error('updates_source_invalid');
+    let current;
+    try { current = parsePublication(body, now, true); } catch (error) { if (error.message === 'updates_invalid') throw error; throw new Error('updates_source_invalid'); }
+    const legacy = body.updates === undefined, candidate = current.updates;
     if (legacy) {
       const generated = Date.parse(body.feed.generated_at);
       if (!Number.isFinite(generated) || generated > now + CLOCK_SKEW) throw new Error('updates_source_invalid');
       try { parseFeed(body.feed, generated); } catch { throw new Error('updates_source_invalid'); }
     }
-    if (previous && (!candidate || JSON.stringify(candidate) !== JSON.stringify(previous))) throw new Error('updates_stale');
-    if (candidate) { previous = candidate; previousBody = body; }
-    if (previous?.release_run_id === source.id) return { run_id: context.run_id, updates: previous, previous_publication: previousPublication(body, source, now) };
+    const identity = JSON.stringify({ ...current, feed: body.feed });
+    if (previous && (!candidate || identity !== previousIdentity)) throw new Error('updates_stale');
+    if (candidate) { previous = candidate; previousBody = body; previousContext = current; previousIdentity = identity; }
+    if (current.publication?.release_run_id === source.id) {
+      const built = Date.parse(body.site_generated_at);
+      if (built < source.created - 5000 || built > source.updated + 5000) throw new Error('updates_stale');
+      return { run_id: context.run_id, updates: previous, previous_publication: previousPublication(body, source, now) };
+    }
     if (attempt === 0) {
       if (deadline - clock() < 2000) throw new Error('updates_timeout');
       await wait(2000);
@@ -109,16 +117,17 @@ export async function restoreUpdates(context, { token, event = null, fetcher = f
     if (!bootstrapAllowed(context, event, source)) throw new Error('updates_bootstrap');
     return { run_id: context.run_id, bootstrap: { before: event.before, after: event.after, ref: event.ref, source_sha: source.head_sha } };
   }
-  const raw = await get(`${RUNS_URL}/runs/${previous.release_run_id}/attempts/1`, headers, 256 * 1024);
-  const published = runInfo(raw), built = Date.parse(previous.last_built_at);
-  if (published.id !== previous.release_run_id || published.updated <= source.updated || built < published.created - 5000 || built > published.updated + 5000) throw new Error('updates_stale');
+  const publicationId = previousContext.publication.release_run_id;
+  const raw = await get(`${RUNS_URL}/runs/${publicationId}/attempts/1`, headers, 256 * 1024);
+  const published = runInfo(raw), built = Date.parse(previousBody.site_generated_at);
+  if (published.id !== publicationId || published.updated <= source.updated || built < published.created - 5000 || built > published.updated + 5000) throw new Error('updates_stale');
   return { run_id: context.run_id, updates: previous, previous_publication: previousPublication(previousBody, published, now) };
 }
 
 export async function buildHistory(context) {
   let raw;
   try {
-    if ((await stat('data/updates.json')).size > 1024 * 1024) throw new Error('updates_size');
+    if ((await stat('data/updates.json')).size > MAX_HISTORY_BYTES) throw new Error('updates_size');
     raw = JSON.parse(await readFile('data/updates.json', 'utf8'));
   } catch (error) {
     if (error.code === 'ENOENT' && !context) return null;

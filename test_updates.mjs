@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { MAX_HISTORY_IDS } from './capacity.mjs';
 import { advanceUpdates, parseUpdates, calendarWeek, beijingDay } from './feed.mjs';
 import { restoreUpdates, restoredFiles, publicationContext, bootstrapAllowed, BOOTSTRAP_PARENT_SHA, REPOSITORY, RUNS_URL, PAGE_FEED_URL } from './scripts/updates.mjs';
 
@@ -75,9 +76,9 @@ test('history schema rejects invalid IDs, markers, dates, counts and backward ti
 });
 
 test('the permanent seen-ID limit fails rather than evicting old IDs', () => {
-  const base = history(); base.seen_ids = Array.from({ length: 50000 }, (_, index) => item(index).id); base.baseline_count = 50000;
-  assert.equal(parseUpdates(base, NOW, true).seen_ids.length, 50000);
-  assert.throws(() => advanceUpdates(base, [item(50000)], at(0), '101'), /updates_capacity/);
+  const base = history(); base.seen_ids = Array.from({ length: MAX_HISTORY_IDS }, (_, index) => item(index).id); base.baseline_count = MAX_HISTORY_IDS;
+  assert.equal(parseUpdates(base, NOW, true).seen_ids.length, MAX_HISTORY_IDS);
+  assert.throws(() => advanceUpdates(base, [item(MAX_HISTORY_IDS)], at(0), '101'), /updates_capacity/);
 });
 
 test('unsupported production branch, event and rerun are rejected before I/O', async () => {
