@@ -4,8 +4,8 @@ import { parseArchive, parseArchiveManifest, readArchiveResponse } from '../arch
 import { parseFeed, parseUpdates, filterItems, curateItems } from '../feed.mjs';
 import { publicationContext, PAGE_FEED_URL } from './updates.mjs';
 
-export const ARCHIVE_BOOTSTRAP_PUSH_PARENT_SHA = 'e156ca527d84b55fcc1b87bc0d4f968f22a747b9';
-export const ARCHIVE_BOOTSTRAP_SOURCE_SHA = 'e156ca527d84b55fcc1b87bc0d4f968f22a747b9';
+export const ARCHIVE_BOOTSTRAP_PUSH_PARENT_SHA = '';
+export const ARCHIVE_BOOTSTRAP_SOURCE_SHA = '';
 export const PAGE_ARCHIVE_URL = new URL('archive.json', PAGE_FEED_URL).href;
 const SOURCE_LIMIT = 17 * 1024 * 1024;
 function contextValid(context) {
