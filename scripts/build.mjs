@@ -2,6 +2,8 @@ import { mkdir, readdir, rm, copyFile, readFile, writeFile } from 'node:fs/promi
 import { parseFeed, filterItems, advanceUpdates } from '../feed.mjs';
 import { validateChannels } from '../rss.mjs';
 import { publicationContext, buildHistory } from './updates.mjs';
+import { advanceArchive, encodeArchive } from '../archive.mjs';
+import { buildArchiveSource, recommendationEntries } from './archive.mjs';
 
 const state = JSON.parse(await readFile('data/feed.json', 'utf8'));
 const feed = { schema_version: 1, source: 'youtube', ...parseFeed(state.feed) };
@@ -15,11 +17,19 @@ if (feed.collection) {
 
 const context = publicationContext(), previous = await buildHistory(context), siteTime = new Date().toISOString();
 const updates = advanceUpdates(previous, feed.items, siteTime, context?.run_id || 'preview');
-const published = JSON.stringify({ feed, channels, site_generated_at: siteTime, updates }) + '\n';
+const source = await buildArchiveSource(context);
+if (source.previous && previous && (source.previous.release_run_id !== previous.release_run_id || source.previous.updated_at !== previous.last_built_at)) throw new Error('archive_mismatch');
+const entries = [...(source.seed ? recommendationEntries(source.seed.feed, source.seed.snapshot_at) : []), ...recommendationEntries(feed, siteTime)];
+const archive = advanceArchive(source.previous, entries, siteTime, context?.run_id || 'preview');
+const seen = new Set(updates.seen_ids);
+if (archive.records.some(row => !seen.has(row.item.id))) throw new Error('archive_seen_mismatch');
+const encoded = await encodeArchive(archive);
+const published = JSON.stringify({ feed, channels, site_generated_at: siteTime, updates, archive: encoded.manifest }) + '\n';
 if (Buffer.byteLength(published) > 1024 * 1024) throw new Error('Update history capacity reached; migration is required.');
 
 await mkdir('dist', { recursive: true });
 for (const name of await readdir('dist')) await rm(`dist/${name}`, { recursive: true });
-for (const name of ['index.html', 'styles.css', 'app.mjs', 'feed.mjs']) await copyFile(name, `dist/${name}`);
+for (const name of ['index.html', 'styles.css', 'app.mjs', 'feed.mjs', 'archive.mjs']) await copyFile(name, `dist/${name}`);
 await writeFile('dist/feed.json', published);
-console.log('Built 5 static files; source configuration and private runtime files excluded.');
+await writeFile('dist/archive.json', encoded.body);
+console.log(`Built 7 static files; ${archive.records.length} archived recommendations. Source configuration and private runtime files excluded.`);
