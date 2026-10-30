@@ -1,8 +1,10 @@
 import { TOPICS, parseFeed, filterItems, assertFresh, videoUrl, captionUrl, thumbnailUrl, compareForRecommendation, curateItems, isRecent, parseUpdates, calendarWeek, beijingDay } from './feed.mjs';
+import { ARCHIVE_TOPICS, parseArchiveManifest, readArchiveResponse, filterArchive } from './archive.mjs';
 
 const $ = selector => document.querySelector(selector);
 let feed = null, channels = [], topic = 'all', period = 'all', selection = 'recommended', latestRequest = 0;
 let updates = null, updateStatus = 'loading';
+let currentView = 'feed', archiveManifest = null, archive = null, archiveStatus = 'loading', archivePage = 0, archiveRequest = 0, archiveController = null;
 function element(tag, className, text) { const el = document.createElement(tag); if (className) el.className = className; if (text !== undefined) el.textContent = text; return el; }
 function link(label, href) { const el = element('a', 'text-link', label); el.href = href; el.target = '_blank'; el.rel = 'noopener noreferrer'; return el; }
 function beijingTime(value) { return new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }); }
@@ -43,25 +45,31 @@ function fresh() {
   catch { feed = null; $('#status-text').textContent = '旧列表已过期'; $('#status-detail').textContent = '请等待订阅更新；专题来源仍可直接浏览。'; $('#status-dot').classList.remove('ready'); }
 }
 function switchView(view) {
+  currentView = view;
   document.querySelectorAll('[data-view]').forEach(el => { const active = el.dataset.view === view; el.classList.toggle('active', active); if (active) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
   $('#feed-view').hidden = view !== 'feed'; $('#sources-view').hidden = view !== 'sources';
+  $('#archive-view').hidden = view !== 'archive'; $('.hero').hidden = view === 'archive'; $('#update-calendar').hidden = view === 'archive';
   render();
+  if (view === 'archive' && archiveManifest && archiveStatus !== 'ready' && archiveStatus !== 'loading_archive') void loadArchive();
 }
-function makeCard(item, waiting = false) {
+function makeCard(item, waiting = false, history = null) {
   const card = element('article', 'card');
   const head = element('div', `card-top ${item.topics[0]}`);
-  head.append(element('span', '', item.topics.map(t => TOPICS[t]).join(' · ')), element('small', '', 'YouTube'));
+  head.append(element('span', '', item.topics.map(t => (history ? ARCHIVE_TOPICS : TOPICS)[t]).join(' · ')), element('small', '', 'YouTube'));
   const body = element('div', 'card-body');
-  const analysis = item.analysis, channelName = channels.find(channel => channel.id === item.channel_id)?.name || item.channel;
+  const analysis = item.analysis, channelName = history ? item.channel : channels.find(channel => channel.id === item.channel_id)?.name || item.channel;
   const image = element('img', 'card-preview');
   image.alt = `${item.title} · 原视频预览图`; image.loading = 'lazy'; image.decoding = 'async'; image.referrerPolicy = 'no-referrer'; image.width = 480; image.height = 270;
   image.addEventListener('error', () => image.remove()); image.src = thumbnailUrl(item.id);
   body.append(element('h3', '', analysis?.title_zh || item.title), element('p', 'byline', channelName), element('p', 'byline', `作者发布：${beijingTime(item.published_at)}（北京时间）`));
-  body.append(element('p', 'card-flag', isRecent(item, Date.parse(feed.generated_at)) ? '近期 · 采集时90天内发布' : '往期参考 · 采集时90天前发布'));
+  body.append(element('p', 'card-flag', isRecent(item, Date.parse(history?.collected_at || feed.generated_at)) ? '近期 · 采集时90天内发布' : '往期参考 · 采集时90天前发布'));
+  if (history) {
+    body.append(element('p', 'archive-label', `归档时${history.selection === 'recommended' ? '精选' : '探索待看'} · 首次归档时的内容`), element('p', 'byline', `首次归档：${beijingTime(history.first_archived_at)}`), element('p', 'byline', `最近入选（原页面时刻）：${beijingTime(history.last_recommended_at)}`));
+  }
   const count = value => value === undefined ? '暂不可用' : value.toLocaleString('zh-CN');
-  body.append(element('p', 'byline', `${item.duration_seconds ? `时长 ${clockTime(item.duration_seconds)} · ` : ''}播放 ${count(item.popularity?.view_count)} · 赞 ${count(item.popularity?.like_count)}（本批快照）`));
+  body.append(element('p', 'byline', `${item.duration_seconds ? `时长 ${clockTime(item.duration_seconds)} · ` : ''}播放 ${count(item.popularity?.view_count)} · 赞 ${count(item.popularity?.like_count)}（${history ? '归档时' : '本批'}快照）`));
   if (item.topic_basis === 'query') body.append(element('p', 'card-flag', '主题按检索词推断，具体玩法与月龄待核对。'));
-  if (waiting && analysis?.relevance === 'relevant') body.append(element('p', 'card-flag', '近期播放量低于本批相关往期的参考水平，或缺少播放数据，先作探索。'));
+  if (waiting && analysis?.relevance === 'relevant' && !history) body.append(element('p', 'card-flag', '近期播放量低于本批相关往期的参考水平，或缺少播放数据，先作探索。'));
   if (analysis) {
     body.append(element('p', 'ai-summary', analysis.summary));
     if (analysis.takeaways.length) {
@@ -77,9 +85,10 @@ function makeCard(item, waiting = false) {
     const original = element('details', 'original');
     original.append(element('summary', '', '原文标题与简介'), element('p', '', item.title), element('p', '', item.description || '原片没有提供简介。')); body.append(original);
   } else {
-    const pending = ['unavailable', 'partial'].includes(feed?.enrichment?.status) ? '中文速览暂不可用' : feed?.enrichment?.status === 'not_configured' ? '尚未启用中文速览' : '尚未生成速览';
+    const pending = history ? '首次归档时没有中文速览' : ['unavailable', 'partial'].includes(feed?.enrichment?.status) ? '中文速览暂不可用' : feed?.enrichment?.status === 'not_configured' ? '尚未启用中文速览' : '尚未生成速览';
     body.append(element('p', 'description', item.description || '此条没有简介，可直接打开原视频。'), element('p', 'card-flag', `${pending} · 当前显示原文 · 月龄与做法请看原片核对`));
   }
+  if (history?.description_truncated) body.append(element('p', 'card-flag', '原简介仅保存前400个字符（节选）；完整简介请看原视频。'));
   if (analysis?.basis !== 'captions' && item.caption_status) {
     const message = { not_configured: '字幕尚未接通，当前依据标题与简介。', available: '字幕已获取，速览尚未使用字幕。', unavailable: '本次未获取到可用字幕。', pending: '字幕服务尚未返回可用文本。', error: '本次字幕获取暂不可用。', not_selected: '本次未读取字幕。' }[item.caption_status];
     body.append(element('p', 'card-flag', message));
@@ -87,6 +96,56 @@ function makeCard(item, waiting = false) {
   const actions = element('div', 'card-actions');
   actions.append(link('看原视频 ↗', videoUrl(item.id)), link('看这个频道 ↗', `https://www.youtube.com/channel/${item.channel_id}`));
   body.append(actions); card.append(image, head, body); return card;
+}
+function readArchiveHeader(state) {
+  let next = null, status = 'not_started';
+  try {
+    if (Object.hasOwn(state, 'archive')) {
+      next = parseArchiveManifest(state.archive);
+      if (next.updated_at !== state.site_generated_at || next.release_run_id !== state.updates?.release_run_id || next.release_run_attempt !== state.updates?.release_run_attempt) throw new Error('archive_mismatch');
+      status = 'unloaded';
+    }
+  } catch { next = null; status = 'error'; }
+  if (next?.sha256 !== archiveManifest?.sha256 || !next) {
+    archiveRequest++; archiveController?.abort(); archiveController = null; archive = null; archivePage = 0; archiveStatus = status;
+  }
+  archiveManifest = next;
+  if (currentView === 'archive' && next && !archive && archiveStatus !== 'loading_archive') void loadArchive();
+  renderArchive();
+}
+async function loadArchive() {
+  if (!archiveManifest) return;
+  const manifest = archiveManifest, serial = ++archiveRequest;
+  archiveController?.abort(); const controller = new AbortController(); archiveController = controller;
+  const timer = setTimeout(() => controller.abort(), 30000);
+  archiveStatus = 'loading_archive'; renderArchive();
+  try {
+    const response = await fetch(`./archive.json?release=${manifest.release_run_id}`, { cache: 'no-store', redirect: 'error', signal: controller.signal });
+    const value = await readArchiveResponse(response, manifest);
+    if (serial !== archiveRequest) return;
+    archive = value; archiveStatus = 'ready';
+  } catch { if (serial === archiveRequest) { archive = null; archiveStatus = 'error'; } }
+  finally { clearTimeout(timer); if (serial === archiveRequest) { archiveController = null; renderArchive(); } }
+}
+function renderArchive() {
+  $('#archive-count').textContent = archiveManifest ? String(archiveManifest.item_count) : '—';
+  $('#archive-summary').textContent = archiveManifest ? `自 ${beijingDay(archiveManifest.started_at).replaceAll('-', '/')} 开始保留 · 累计 ${archiveManifest.item_count} 条不同内容` : '保留曾入选的内容，之后也能回来找。';
+  const status = $('#archive-status'), cards = $('#archive-cards');
+  $('#archive-retry').hidden = archiveStatus !== 'error';
+  $('#archive-pagination').hidden = archiveStatus !== 'ready';
+  if (archiveStatus !== 'ready' || !archive) {
+    cards.replaceChildren();
+    status.textContent = { loading: '正在读取归档信息…', unloaded: '进入历史推荐后读取内容。', loading_archive: '正在读取历史推荐…', not_started: '历史归档尚未启用，请稍后刷新。', error: '历史推荐暂时无法载入，请刷新重试；不会把读取失败当成没有历史。' }[archiveStatus];
+    return;
+  }
+  let records;
+  try { records = filterArchive(archive.records, { topic: $('#archive-topic').value, query: $('#archive-search').value, from: $('#archive-from').value, to: $('#archive-to').value }); }
+  catch { cards.replaceChildren(); status.textContent = '请检查首次归档日期，开始日期不能晚于结束日期。'; $('#archive-pagination').hidden = true; return; }
+  const pages = Math.max(1, Math.ceil(records.length / 12)); archivePage = Math.min(archivePage, pages - 1);
+  status.textContent = records.length ? `找到 ${records.length} 条 · 按最近入选排序` : archive.records.length ? '这次没有匹配的历史内容，试试其他日期、主题或关键词。' : '归档已启用，尚无可见内容。';
+  cards.replaceChildren(...records.slice(archivePage * 12, (archivePage + 1) * 12).map(row => makeCard(row.item, row.selection === 'pending', row)));
+  $('#archive-page').textContent = `第 ${archivePage + 1} / ${pages} 页`;
+  $('#archive-prev').disabled = archivePage === 0; $('#archive-next').disabled = archivePage >= pages - 1;
 }
 function render() {
   fresh();
@@ -113,6 +172,7 @@ function render() {
   $('#empty').hidden = items.length > 0;
   $('#empty-title').textContent = feed ? (selection === 'recommended' && !curated.recommended.length ? '本批暂没有可确认的精选玩法' : '这次还没有匹配的内容') : '内容的位置，已经留好了';
   $('#empty-copy').textContent = feed ? `换个主题或关键词试试。${selection === 'recommended' && curated.pending.length ? `也可切换“探索待看”查看 ${curated.pending.length} 条候选。` : ''}\n没有合适内容时不凑数，也可以从精选来源继续看。` : '订阅更新后会在这里展示真实内容。\n先从精选来源寻找1—2岁陪伴的灵感。';
+  renderArchive();
 }
 async function loadFeed() {
   const serial = ++latestRequest;
@@ -121,7 +181,8 @@ async function loadFeed() {
     if (!response.ok) throw new Error('订阅暂时不可用，请稍后刷新；精选来源仍可浏览。');
     const state = await response.json();
     if (serial !== latestRequest) return;
-    feed = state.feed ? parseFeed(state.feed) : null;
+    readArchiveHeader(state);
+    try { feed = state.feed ? parseFeed(state.feed) : null; } catch (error) { feed = null; throw error; }
     updates = null; updateStatus = state.updates === undefined ? 'not_started' : 'unavailable';
     if (state.updates !== undefined) {
       try { updates = parseUpdates(state.updates); if (updates.last_built_at !== state.site_generated_at) throw new Error('updates_invalid'); updateStatus = 'ready'; } catch { /* Invalid history never becomes an invented zero. */ }
@@ -142,6 +203,7 @@ async function loadFeed() {
     render();
   } catch (error) {
     if (serial !== latestRequest) return;
+    if (!archiveManifest && archiveStatus === 'loading') archiveStatus = 'error';
     if (!feed) updateStatus = 'unavailable';
     $('#status-text').textContent = '订阅连接不可用'; $('#status-detail').textContent = error instanceof SyntaxError ? '订阅数据格式不正确，请稍后刷新。' : error.message;
     $('#status-dot').classList.remove('ready'); render();
@@ -154,6 +216,12 @@ document.querySelectorAll('[data-topic]').forEach(el => el.addEventListener('cli
 document.querySelectorAll('[data-period]').forEach(el => el.addEventListener('click', () => { period = el.dataset.period; document.querySelectorAll('[data-period]').forEach(chip => { const selected = chip === el; chip.classList.toggle('selected', selected); chip.setAttribute('aria-pressed', String(selected)); }); render(); }));
 document.querySelectorAll('[data-selection]').forEach(el => el.addEventListener('click', () => { selection = el.dataset.selection; document.querySelectorAll('[data-selection]').forEach(chip => { const selected = chip === el; chip.classList.toggle('selected', selected); chip.setAttribute('aria-pressed', String(selected)); }); render(); }));
 $('#search').addEventListener('input', render);
+for (const [value, label] of [['all', '全部主题'], ...Object.entries(ARCHIVE_TOPICS)]) { const option = element('option', '', label); option.value = value; $('#archive-topic').append(option); }
+$('#archive-topic').value = 'all';
+for (const [selector, event] of [['#archive-search', 'input'], ['#archive-topic', 'change'], ['#archive-from', 'change'], ['#archive-to', 'change']]) $(selector).addEventListener(event, () => { archivePage = 0; renderArchive(); });
+$('#archive-prev').addEventListener('click', () => { if (archivePage > 0) archivePage--; renderArchive(); });
+$('#archive-next').addEventListener('click', () => { archivePage++; renderArchive(); });
+$('#archive-retry').addEventListener('click', async () => { await loadFeed(); if (archiveManifest && archiveStatus === 'error') await loadArchive(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { render(); void loadFeed(); } });
 setInterval(() => { if (feed) { try { assertFresh(feed.generated_at); renderCalendar(); } catch { render(); } } }, 60000);
 render(); await loadFeed();

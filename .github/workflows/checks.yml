@@ -55,6 +55,9 @@ jobs:
         run: npm run updates
         env:
           GITHUB_TOKEN: ${{ github.token }}
+      - name: Restore recommendation archive
+        if: github.event_name != 'pull_request'
+        run: npm run archive
       - run: npm run collect
         if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         env:

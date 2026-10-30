@@ -7,6 +7,8 @@ const files = {
   'app.mjs': 'text/javascript; charset=utf-8',
   'feed.mjs': 'text/javascript; charset=utf-8',
   'feed.json': 'application/json; charset=utf-8',
+  'archive.mjs': 'text/javascript; charset=utf-8',
+  'archive.json': 'application/json; charset=utf-8',
 };
 const server = createServer(async (request, response) => {
   const path = new URL(request.url, 'http://localhost').pathname;

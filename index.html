@@ -19,6 +19,7 @@
   <nav aria-label="主导航">
     <button class="nav active" data-view="feed" aria-current="page"><span aria-hidden="true">◈</span>精选玩法<span class="count" id="feed-count">0</span></button>
     <button class="nav" data-view="sources"><span aria-hidden="true">↗</span>精选来源</button>
+    <button class="nav" data-view="archive"><span aria-hidden="true">▤</span>历史推荐<span class="count" id="archive-count">—</span></button>
     <a class="nav" href="https://luca-creator-studio.pearlyfield19.chatgpt.site" target="_blank" rel="noopener noreferrer"><span aria-hidden="true">✳</span>创作助手</a>
   </nav>
   <div class="sidebar-note"><span class="tiny-leaf" aria-hidden="true">✳</span><p>不赶着长大，<br>先好好一起玩。</p><small>关注 12–24 个月的亲子陪伴</small></div>
@@ -47,6 +48,22 @@
     <div id="cards" class="cards"></div>
     <div id="empty" class="empty"><span class="empty-icon" aria-hidden="true">✳</span><h3 id="empty-title">灵感的位置，已经留好了</h3><p id="empty-copy">内容更新后会在这里展示真实分享。<br>也可以先从“精选来源”找一件想一起尝试的小事。</p><button class="button outline" id="setup">看看精选来源 ↗</button></div>
 
+  </section>
+  <section id="archive-view" class="view" hidden aria-labelledby="archive-heading">
+    <div class="section-heading"><div><p class="eyebrow">GOOD IDEAS, KEPT FOR LATER</p><h2 id="archive-heading">历史推荐</h2></div></div>
+    <p id="archive-summary" class="archive-summary">保留曾入选的内容，之后也能回来找。</p>
+    <p class="scope-note">不按天清理，同一视频只留一份。这里保存首次归档时的内容；当时没有概要的保留原文，以后的概要不会覆盖首快照。启用前仍在线的内容按启用日归档，不等于原始推荐日。</p>
+    <div class="archive-filters">
+      <label class="search-wrap"><input id="archive-search" type="search" maxlength="200" aria-label="搜索历史推荐" placeholder="搜旧玩法、作者或中文概要…"></label>
+      <label>主题<select id="archive-topic" aria-label="历史主题"></select></label>
+      <label>首次归档起日<input type="date" id="archive-from"></label>
+      <label>首次归档止日<input type="date" id="archive-to"></label>
+    </div>
+    <p class="scope-note">日期按北京时间，包含起止当天；列表按最近入选排序。归档时的热度、概要和材料说明均为当时快照，原片是否可看由来源平台决定。</p>
+    <p id="archive-status" class="archive-status" role="status" aria-live="polite">正在读取归档信息…</p>
+    <button class="button outline" id="archive-retry" hidden>重新读取</button>
+    <div id="archive-cards" class="cards"></div>
+    <nav id="archive-pagination" class="archive-pagination" aria-label="历史推荐分页" hidden><button class="button outline" id="archive-prev">上一页</button><span id="archive-page"></span><button class="button outline" id="archive-next">下一页</button></nav>
   </section>
   <section id="sources-view" class="view" hidden>
     <div class="section-heading"><div><p class="eyebrow">KEEP THE SOURCE, KEEP YOUR JUDGMENT</p><h2>精选来源</h2></div><span class="pill">关注1—2岁</span></div>

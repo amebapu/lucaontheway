@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { parseUpdates, parseFeed, CLOCK_SKEW } from '../feed.mjs';
+import { parseArchiveManifest } from '../archive.mjs';
 
 export const BOOTSTRAP_PARENT_SHA = '';
 export const REPOSITORY = 'amebapu/lucaontheway';
@@ -29,6 +30,22 @@ function runInfo(raw) {
   const created = Date.parse(raw?.created_at), updated = Date.parse(raw?.updated_at);
   if (!Number.isSafeInteger(raw?.id) || raw.id <= 0 || raw.run_attempt !== 1 || raw.status !== 'completed' || !['success', 'failure', 'cancelled', 'timed_out'].includes(raw.conclusion) || raw.head_branch !== 'main' || !EVENTS.includes(raw.event) || !['.github/workflows/checks.yml', '.github/workflows/checks.yml@main', '.github/workflows/checks.yml@refs/heads/main', `.github/workflows/checks.yml@${raw.head_sha}`].includes(raw.path) || raw.repository?.full_name !== REPOSITORY || !SHA.test(raw.head_sha) || !Number.isFinite(created) || !Number.isFinite(updated) || updated < created) throw new Error('updates_source_invalid');
   return { id: String(raw.id), head_sha: raw.head_sha, created, updated, conclusion: raw.conclusion };
+}
+
+function previousPublication(body, source, now) {
+  try {
+    const generated = Date.parse(body.site_generated_at);
+    const feed = { schema_version: 1, source: 'youtube', ...parseFeed(body.feed, generated) };
+    const archive_present = Object.hasOwn(body, 'archive');
+    return { run_id: source.id, head_sha: source.head_sha, site_generated_at: body.site_generated_at, feed, archive_present, ...(archive_present ? { archive: parseArchiveManifest(body.archive, now, true) } : {}) };
+  } catch { throw new Error('updates_source_invalid'); }
+}
+
+export function restoredFiles(result) {
+  const { previous_publication, ...history } = result;
+  const updates = JSON.stringify(history) + '\n', publication = JSON.stringify({ run_id: result.run_id, previous_publication }) + '\n';
+  if (Buffer.byteLength(updates) > 1024 * 1024 || Buffer.byteLength(publication) > 2 * 1024 * 1024) throw new Error('updates_size');
+  return { updates, publication };
 }
 
 async function fetchJson(url, headers, limit, timeoutMs, fetcher) {
@@ -69,7 +86,7 @@ export async function restoreUpdates(context, { token, event = null, fetcher = f
   }
   const source = successful.sort((a, b) => b.updated - a.updated)[0];
   if (!source) throw new Error('updates_source_invalid');
-  let previous = null;
+  let previous = null, previousBody = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const body = await get(`${PAGE_FEED_URL}?calendar_run=${context.run_id}&try=${attempt + 1}`, { 'Cache-Control': 'no-cache' }, 1024 * 1024);
     if (!body || typeof body !== 'object' || !body.feed || typeof body.site_generated_at !== 'string') throw new Error('updates_source_invalid');
@@ -81,8 +98,8 @@ export async function restoreUpdates(context, { token, event = null, fetcher = f
       try { parseFeed(body.feed, generated); } catch { throw new Error('updates_source_invalid'); }
     }
     if (previous && (!candidate || JSON.stringify(candidate) !== JSON.stringify(previous))) throw new Error('updates_stale');
-    if (candidate) previous = candidate;
-    if (previous?.release_run_id === source.id) return { run_id: context.run_id, updates: previous };
+    if (candidate) { previous = candidate; previousBody = body; }
+    if (previous?.release_run_id === source.id) return { run_id: context.run_id, updates: previous, previous_publication: previousPublication(body, source, now) };
     if (attempt === 0) {
       if (deadline - clock() < 2000) throw new Error('updates_timeout');
       await wait(2000);
@@ -95,7 +112,7 @@ export async function restoreUpdates(context, { token, event = null, fetcher = f
   const raw = await get(`${RUNS_URL}/runs/${previous.release_run_id}/attempts/1`, headers, 256 * 1024);
   const published = runInfo(raw), built = Date.parse(previous.last_built_at);
   if (published.id !== previous.release_run_id || published.updated <= source.updated || built < published.created - 5000 || built > published.updated + 5000) throw new Error('updates_stale');
-  return { run_id: context.run_id, updates: previous };
+  return { run_id: context.run_id, updates: previous, previous_publication: previousPublication(previousBody, published, now) };
 }
 
 export async function buildHistory(context) {
@@ -124,8 +141,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const context = publicationContext();
     if (!context) throw new Error('updates_context');
     const result = await restoreUpdates(context, { token: process.env.GITHUB_TOKEN, event: await pushEvent(context, process.env) });
+    const files = restoredFiles(result);
     await mkdir('data', { recursive: true });
-    await writeFile('data/updates.json', JSON.stringify(result) + '\n');
+    await writeFile('data/updates.json', files.updates);
+    await writeFile('data/previous-publication.json', files.publication);
     console.log(JSON.stringify({ updates: result.bootstrap ? 'initial_baseline_authorized' : 'restored', seen: result.updates?.seen_ids.length || 0 }));
   } catch (error) {
     const allowed = ['updates_context', 'updates_authentication', 'updates_source_invalid', 'updates_rate_limit', 'updates_http', 'updates_size', 'updates_timeout', 'updates_network', 'updates_bootstrap', 'updates_stale', 'updates_invalid'];

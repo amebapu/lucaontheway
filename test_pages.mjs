@@ -20,7 +20,7 @@ async function temporaryProject(t) {
 }
 async function buildFixture(t, state) {
   const root = await temporaryProject(t);
-  for (const name of ['index.html', 'styles.css', 'app.mjs', 'feed.mjs']) await copyFile(new URL(name, import.meta.url), join(root, name));
+  for (const name of ['index.html', 'styles.css', 'app.mjs', 'feed.mjs', 'archive.mjs']) await copyFile(new URL(name, import.meta.url), join(root, name));
   await mkdir(join(root, 'data'));
   await writeFile(join(root, 'data/feed.json'), JSON.stringify(state));
   return root;
@@ -28,6 +28,21 @@ async function buildFixture(t, state) {
 function build(root) {
   return spawnSync(process.execPath, [fileURLToPath(new URL('scripts/build.mjs', import.meta.url))], { cwd: root, encoding: 'utf8', env: { ...process.env, GITHUB_ACTIONS: 'false' } });
 }
+
+test('a later batch retains earlier visible recommendations in the public archive', async t => {
+  const first = snapshot(), root = await buildFixture(t, { feed: first, channels: [channel] });
+  assert.equal(build(root).status, 0);
+  const archive = JSON.parse(await readFile(join(root, 'dist/archive.json'), 'utf8'));
+  const published = JSON.parse(await readFile(join(root, 'dist/feed.json'), 'utf8'));
+  await writeFile(join(root, 'data/updates.json'), JSON.stringify({ updates: published.updates }));
+  await writeFile(join(root, 'data/archive-source.json'), JSON.stringify({ run_id: 'preview', previous: archive, seed: null }));
+  const next = snapshot(); next.items[0].id = 'SYNTHETIC02';
+  await writeFile(join(root, 'data/feed.json'), JSON.stringify({ feed: next, channels: [channel] }));
+  assert.equal(build(root).status, 0);
+  const retained = JSON.parse(await readFile(join(root, 'dist/archive.json'), 'utf8'));
+  assert.deepEqual(retained.records.map(row => row.item.id).sort(), ['SYNTHETIC01', 'SYNTHETIC02']);
+  assert.deepEqual(retained.records.find(row => row.item.id === 'SYNTHETIC01'), archive.records[0]);
+});
 
 test('homepage leads with a seven-day calendar and keeps operational details below both views', async () => {
   const html = await readFile(new URL('index.html', import.meta.url), 'utf8');
@@ -77,7 +92,7 @@ test('restored daily history survives the actual build while private inputs stay
   const text = await readFile(join(root, 'dist/feed.json'), 'utf8'), next = JSON.parse(text).updates;
   assert.equal(next.tracked_since, updates.tracked_since); assert.deepEqual(next.seen_ids, updates.seen_ids);
   assert.equal(next.days.at(-1).new_count, 0); assert.equal(text.includes('SYNTHETIC_PRIVATE_MARKER'), false);
-  assert.deepEqual((await readdir(join(root, 'dist'))).sort(), ['app.mjs', 'feed.json', 'feed.mjs', 'index.html', 'styles.css']);
+  assert.deepEqual((await readdir(join(root, 'dist'))).sort(), ['app.mjs', 'archive.json', 'archive.mjs', 'feed.json', 'feed.mjs', 'index.html', 'styles.css']);
 });
 
 test('RSS failure diagnostics expose only HTTP status or a fixed network error type', async t => {
@@ -133,7 +148,7 @@ test('the actual build emits only static files and removes unrelated runtime fie
   await writeFile(join(root, 'dist/private.json'), 'SYNTHETIC_PRIVATE_MARKER');
   const before = Date.now(), result = build(root);
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual((await readdir(join(root, 'dist'))).sort(), ['app.mjs', 'feed.json', 'feed.mjs', 'index.html', 'styles.css']);
+  assert.deepEqual((await readdir(join(root, 'dist'))).sort(), ['app.mjs', 'archive.json', 'archive.mjs', 'feed.json', 'feed.mjs', 'index.html', 'styles.css']);
   assert.equal((await readFile(join(root, 'dist/feed.json'), 'utf8')).includes('SYNTHETIC_PRIVATE_MARKER'), false);
   const published = JSON.parse(await readFile(join(root, 'dist/feed.json'), 'utf8'));
   assert.equal(published.feed.items[0].analysis.title_zh, '一起玩拼图');
@@ -172,7 +187,7 @@ test('the actual build keeps timestamped play notes while excluding transcript t
   assert.deepEqual(published.analysis.play.steps, [note]);
   assert.equal(published.caption_status, 'available');
   assert.equal(text.includes('SYNTHETIC_RAW_TRANSCRIPT'), false);
-  assert.deepEqual((await readdir(join(root, 'dist'))).sort(), ['app.mjs', 'feed.json', 'feed.mjs', 'index.html', 'styles.css']);
+  assert.deepEqual((await readdir(join(root, 'dist'))).sort(), ['app.mjs', 'archive.json', 'archive.mjs', 'feed.json', 'feed.mjs', 'index.html', 'styles.css']);
 });
 test('the actual build supports healthy empty discovery but rejects missing authors before clearing output', async t => {
   const feed = { ...snapshot(), mode: 'discovery', items: [], discovery: { total_queries: 4, successful_queries: 4, failed_queries: 0, recent_successful_queries: 2, popular_successful_queries: 2, recent_window_days: 90 } };
