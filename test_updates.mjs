@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { advanceUpdates, parseUpdates, calendarWeek, beijingDay } from './feed.mjs';
-import { restoreUpdates, publicationContext, bootstrapAllowed, BOOTSTRAP_PARENT_SHA, REPOSITORY, RUNS_URL, PAGE_FEED_URL } from './scripts/updates.mjs';
+import { restoreUpdates, restoredFiles, publicationContext, bootstrapAllowed, BOOTSTRAP_PARENT_SHA, REPOSITORY, RUNS_URL, PAGE_FEED_URL } from './scripts/updates.mjs';
 
 const NOW = Date.parse('2026-06-15T04:00:00.000Z'), at = offset => new Date(NOW + offset).toISOString();
 const PRE_CALENDAR_SHA = '560e7657dc4bf8bc86da1eb36160bf9adf4ec27f';
@@ -101,6 +101,7 @@ test('matching deployed history restores with authentication only on the fixed G
     return reply(page({ ...value, private_note: 'SYNTHETIC_PRIVATE_MARKER' }));
   });
   assert.equal(calls.length, 2); assert.deepEqual(result.updates, value);
+  assert.equal(result.previous_publication.run_id, '100'); assert.equal(result.previous_publication.head_sha, PRE_CALENDAR_SHA); assert.equal(result.previous_publication.archive_present, false);
   assert.equal(JSON.stringify(result).includes('SYNTHETIC_TOKEN'), false); assert.equal(JSON.stringify(result).includes('SYNTHETIC_PRIVATE_MARKER'), false);
 });
 
@@ -110,6 +111,21 @@ test('documented main workflow path references restore while other files and ref
     assert.equal(result.updates.release_run_id, '100');
   }
   for (const path of ['.github/workflows/other.yml@main', '.github/workflows/checks.yml@feature', '.github/workflows/checks.yml@refs/tags/main', `.github/workflows/checks.yml@${'c'.repeat(40)}`]) await assert.rejects(restore(async () => reply({ workflow_runs: [run(100, { path })] })), /updates_source_invalid/);
+});
+
+test('a near-limit public feed restores into separate bounded files and strips unknown payload fields', async () => {
+  const value = advanceUpdates(null, Array.from({ length: 45000 }, (_, i) => item(i)), at(-20000), '100');
+  const body = page(value);
+  body.feed.items = Array.from({ length: 40 }, (_, i) => ({ ...body.feed.items[0], id: item(i).id, description: 'x'.repeat(5000) }));
+  body.padding = 'SYNTHETIC_PRIVATE_MARKER';
+  const target = 1024 * 1024 - 16;
+  body.padding += 'x'.repeat(target - Buffer.byteLength(JSON.stringify(body)));
+  assert.equal(Buffer.byteLength(JSON.stringify(body)), target);
+  const result = await restore(async url => reply(url.startsWith(RUNS_URL) ? { workflow_runs: [run()] } : body));
+  const files = restoredFiles(result);
+  assert.ok(Buffer.byteLength(files.updates) < 1024 * 1024); assert.ok(Buffer.byteLength(files.publication) < 2 * 1024 * 1024);
+  assert.equal(result.previous_publication.feed.items.length, 40);
+  assert.equal(JSON.stringify(result).includes('SYNTHETIC_PRIVATE_MARKER'), false);
 });
 
 test('observed history is never discarded when the next response is legacy or conflicting', async () => {
@@ -139,9 +155,10 @@ test('a newer already-published failed or cancelled attempt survives, but older 
       if (url.includes('/workflows/')) return reply({ workflow_runs: [run(200, { run_attempt: 2 }), run()] });
       if (url.startsWith(PAGE_FEED_URL)) return reply(page(value));
       assert.equal(url, `${RUNS_URL}/runs/200/attempts/1`);
-      return reply(run(200, { conclusion, created_at: at(-9000), updated_at: at(-1000) }));
+      return reply(run(200, { head_sha: 'c'.repeat(40), conclusion, created_at: at(-9000), updated_at: at(-1000) }));
     });
     assert.equal(result.updates.release_run_id, '200');
+    assert.equal(result.previous_publication.head_sha, 'c'.repeat(40));
   }
   for (const candidate of [run(90, { conclusion: 'failure', updated_at: at(-20000) }), run(90, { head_branch: 'feature' }), run(90, { run_attempt: 2 })]) {
     await assert.rejects(restore(async url => reply(url.includes('/workflows/') ? { workflow_runs: [run()] } : url.startsWith(PAGE_FEED_URL) ? page(history('90')) : candidate)));
