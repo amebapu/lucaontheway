@@ -1,3 +1,6 @@
+import { MAX_HISTORY_IDS } from './capacity.mjs';
+import { parseArchiveManifest } from './archive.mjs';
+
 export const TOPICS = {
   language: '语言互动', movement: '大运动', fine_motor: '精细动作', sensory: '感官盆',
   art: '美育', reading: '绘本', everyday: '亲子游戏', theory: '陪伴方式',
@@ -173,7 +176,7 @@ function weekDates(now) {
 
 export function parseUpdates(raw, now = Date.now(), production = false) {
   const fail = () => { throw new Error('updates_invalid'); };
-  if (!raw || raw.version !== 1 || !Array.isArray(raw.seen_ids) || raw.seen_ids.length > 50000 || raw.seen_ids.some(id => !validVideoId(id)) || new Set(raw.seen_ids).size !== raw.seen_ids.length) fail();
+  if (!raw || raw.version !== 1 || !Array.isArray(raw.seen_ids) || raw.seen_ids.length > MAX_HISTORY_IDS || raw.seen_ids.some(id => !validVideoId(id)) || new Set(raw.seen_ids).size !== raw.seen_ids.length) fail();
   const started = timestamp(raw.tracked_since), built = timestamp(raw.last_built_at);
   if (started > built || built > now + CLOCK_SKEW || !Number.isSafeInteger(raw.baseline_count) || raw.baseline_count < 0 || raw.baseline_count > raw.seen_ids.length) fail();
   if (typeof raw.release_run_id !== 'string' || !(/^[1-9]\d{0,15}$/.test(raw.release_run_id) || (!production && raw.release_run_id === 'preview')) || raw.release_run_attempt !== 1) fail();
@@ -181,7 +184,7 @@ export function parseUpdates(raw, now = Date.now(), production = false) {
   const first = weekDates(built)[0], last = beijingDay(built), start = beijingDay(started), days = [];
   let total = 0;
   for (const row of raw.days) {
-    if (!row || typeof row.date !== 'string' || !/^\d{4}-\d\d-\d\d$/.test(row.date) || !Number.isFinite(Date.parse(`${row.date}T00:00:00Z`)) || new Date(`${row.date}T00:00:00Z`).toISOString().slice(0, 10) !== row.date || row.date < first || row.date < start || row.date > last || (days.length && row.date <= days.at(-1).date) || !Number.isSafeInteger(row.new_count) || row.new_count < 0 || row.new_count > 50000) fail();
+    if (!row || typeof row.date !== 'string' || !/^\d{4}-\d\d-\d\d$/.test(row.date) || !Number.isFinite(Date.parse(`${row.date}T00:00:00Z`)) || new Date(`${row.date}T00:00:00Z`).toISOString().slice(0, 10) !== row.date || row.date < first || row.date < start || row.date > last || (days.length && row.date <= days.at(-1).date) || !Number.isSafeInteger(row.new_count) || row.new_count < 0 || row.new_count > MAX_HISTORY_IDS) fail();
     total += row.new_count; days.push({ date: row.date, new_count: row.new_count });
   }
   if (days.at(-1).date !== last || total > raw.seen_ids.length - raw.baseline_count) fail();
@@ -196,15 +199,44 @@ export function advanceUpdates(previous, items, at = new Date().toISOString(), r
   const seen = new Set(old?.seen_ids || current), counts = new Map(old?.days.map(day => [day.date, day.new_count]));
   let added = 0;
   for (const id of current) if (!seen.has(id)) { seen.add(id); added++; }
-  if (seen.size > 50000) throw new Error('updates_capacity');
+  if (seen.size > MAX_HISTORY_IDS) throw new Error('updates_capacity');
   const day = beijingDay(now); counts.set(day, (counts.get(day) || 0) + added);
   const first = weekDates(now)[0];
   return parseUpdates({ version: 1, tracked_since: old?.tracked_since || at, last_built_at: at, baseline_count: old?.baseline_count ?? current.length, seen_ids: [...seen].sort(), days: [...counts].filter(([date]) => date >= first).sort(([a], [b]) => a.localeCompare(b)).map(([date, new_count]) => ({ date, new_count })), release_run_id: runId, release_run_attempt: 1 }, now);
 }
 
-export function calendarWeek(updates, now = Date.now()) {
+export function parsePublication(raw, now = Date.now(), production = false) {
+  const fail = () => { throw new Error('updates_invalid'); };
+  if (!raw || typeof raw !== 'object') fail();
+  const generated = timestamp(raw.site_generated_at);
+  if (generated > now + CLOCK_SKEW) fail();
+  const updates = raw.updates === undefined ? null : parseUpdates(raw.updates, now, production);
+  const archive = raw.archive === undefined ? null : parseArchiveManifest(raw.archive, now, production);
+  if (!updates) { if (raw.publication !== undefined || archive) fail(); return { site_generated_at: raw.site_generated_at, updates: null, archive: null, publication: null, legacy: true }; }
+  const value = raw.publication;
+  let publication;
+  if (value === undefined) publication = { version: 1, release_run_id: updates.release_run_id, release_run_attempt: 1, history_status: 'current' };
+  else {
+    if (!value || value.version !== 1 || typeof value.release_run_id !== 'string' || !(/^[1-9]\d{0,15}$/.test(value.release_run_id) || (!production && value.release_run_id === 'preview')) || value.release_run_attempt !== 1 || !['current', 'capacity_paused'].includes(value.history_status)) fail();
+    publication = { version: 1, release_run_id: value.release_run_id, release_run_attempt: 1, history_status: value.history_status };
+    if (value.history_status === 'capacity_paused') {
+      if (!archive || !['archive_capacity', 'updates_capacity', 'publication_capacity'].includes(value.capacity_reason)) fail();
+      publication.capacity_reason = value.capacity_reason;
+    } else if (value.capacity_reason !== undefined) fail();
+  }
+  if (timestamp(updates.last_built_at) > generated) fail();
+  if (publication.history_status === 'current' && (updates.last_built_at !== raw.site_generated_at || updates.release_run_id !== publication.release_run_id || updates.release_run_attempt !== publication.release_run_attempt)) fail();
+  if (archive && (archive.updated_at !== updates.last_built_at || archive.release_run_id !== updates.release_run_id || archive.release_run_attempt !== updates.release_run_attempt)) fail();
+  return { site_generated_at: raw.site_generated_at, updates, archive, publication, legacy: value === undefined };
+}
+
+export function calendarWeek(updates, now = Date.now(), context = null) {
   return weekDates(now).map((date, index) => {
     const record = updates?.days.find(day => day.date === date);
+    if (updates && context?.publication?.history_status === 'capacity_paused') {
+      const last = beijingDay(updates.last_built_at);
+      if (date > last || (date === last && date === beijingDay(context.site_generated_at))) return { date, today: index === 6, count: null, recorded_count: record?.new_count ?? null, status: 'capacity_unknown' };
+    }
     return { date, today: index === 6, count: record?.new_count ?? null, status: !updates ? 'unavailable' : record ? 'recorded' : date < beijingDay(updates.tracked_since) ? 'unrecorded' : index === 6 ? 'pending' : 'missed' };
   });
 }

@@ -1,9 +1,10 @@
-import { TOPICS, parseFeed, filterItems, assertFresh, videoUrl, captionUrl, thumbnailUrl, compareForRecommendation, curateItems, isRecent, parseUpdates, calendarWeek, beijingDay } from './feed.mjs';
-import { ARCHIVE_TOPICS, parseArchiveManifest, readArchiveResponse, filterArchive } from './archive.mjs';
+import { TOPICS, parseFeed, filterItems, assertFresh, videoUrl, captionUrl, thumbnailUrl, compareForRecommendation, curateItems, isRecent, parsePublication, calendarWeek, beijingDay } from './feed.mjs';
+import { ARCHIVE_TOPICS, readArchiveResponse, filterArchive } from './archive.mjs';
+import { MAX_ARCHIVE_BYTES, MAX_PUBLICATION_BYTES } from './capacity.mjs';
 
 const $ = selector => document.querySelector(selector);
 let feed = null, channels = [], topic = 'all', period = 'all', selection = 'recommended', latestRequest = 0;
-let updates = null, updateStatus = 'loading';
+let updates = null, updateStatus = 'loading', publicationState = null;
 let currentView = 'feed', archiveManifest = null, archive = null, archiveStatus = 'loading', archivePage = 0, archiveRequest = 0, archiveController = null;
 function element(tag, className, text) { const el = document.createElement(tag); if (className) el.className = className; if (text !== undefined) el.textContent = text; return el; }
 function link(label, href) { const el = element('a', 'text-link', label); el.href = href; el.target = '_blank'; el.rel = 'noopener noreferrer'; return el; }
@@ -11,17 +12,20 @@ function beijingTime(value) { return new Date(value).toLocaleString('zh-CN', { t
 function clockTime(seconds) { const value = Math.floor(seconds); return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, '0')}`; }
 function renderCalendar() {
   const history = feed && updateStatus === 'ready' ? updates : null;
-  const days = calendarWeek(history), today = days.at(-1);
+  const paused = publicationState?.publication?.history_status === 'capacity_paused';
+  const days = calendarWeek(history, Date.now(), publicationState), today = days.at(-1);
   $('#calendar-days').replaceChildren(...days.map(day => {
     const cell = element('li', `calendar-day${day.today ? ' today' : ''}`);
     if (day.today) cell.setAttribute('aria-current', 'date');
     const week = ['日', '一', '二', '三', '四', '五', '六'][new Date(`${day.date}T00:00:00Z`).getUTCDay()];
     const date = element('time', '', day.date.slice(5).replace('-', '/')); date.dateTime = day.date;
-    cell.append(element('span', 'calendar-weekday', day.today ? '今天' : `周${week}`), date, element('strong', 'calendar-number', day.count === null ? '—' : String(day.count)), element('small', '', day.status === 'recorded' ? '新收录' : { unavailable: '待记录', unrecorded: '未记录', missed: '未更新', pending: '待更新' }[day.status]));
+    cell.append(element('span', 'calendar-weekday', day.today ? '今天' : `周${week}`), date, element('strong', 'calendar-number', day.count === null ? '—' : String(day.count)), element('small', '', day.status === 'recorded' ? '新收录' : { unavailable: '待记录', unrecorded: '未记录', missed: '未更新', pending: '待更新', capacity_unknown: '未统计' }[day.status]));
+    if (day.status === 'capacity_unknown' && day.recorded_count !== null) cell.append(element('small', '', `已记录 ${day.recorded_count}`));
     return cell;
   }));
-  $('#today-new').textContent = history ? today.count === null ? '今天待更新' : `今天新收录 ${today.count} 条` : updateStatus === 'loading' ? '正在读取更新记录' : updateStatus === 'not_started' ? '更新记录尚未开始' : '更新记录暂不可用';
+  $('#today-new').textContent = history ? today.count === null ? paused ? '今日新增未统计' : '今天待更新' : `今天新收录 ${today.count} 条` : updateStatus === 'loading' ? '正在读取更新记录' : updateStatus === 'not_started' ? '更新记录尚未开始' : '更新记录暂不可用';
   $('#calendar-note').textContent = history ? `从日历启用起，首次进入本站可见列表才计新增，同一视频不重复计数。${beijingDay(history.tracked_since) === beijingDay() ? `从 ${beijingTime(history.tracked_since)} 开始统计，已有 ${history.baseline_count} 条作为基线，不计新增。` : `按北京时间统计，记录始于 ${beijingDay(history.tracked_since).replaceAll('-', '/')}。`}` : updateStatus === 'loading' ? '新收录从日历启用时开始统计，同一视频不重复计数。' : updateStatus === 'not_started' ? '日历启用前没有历史统计，已有内容仍可阅读。' : '暂时无法读取更新记录，可先阅读已载入内容或查看页面下方的更新详情。';
+  if (history && paused) $('#calendar-note').textContent = `本批推荐照常更新；旧历史仍可读，新增归档和新增统计暂缓，需要扩容。已记录数量截至 ${beijingTime(history.last_built_at)}；此后暂停与漏跑的日期合并为“未统计”。`;
 }
 function playNote(item, play) {
   const details = element('details', 'original play-note'); details.append(element('summary', '', '字幕里的玩法笔记'));
@@ -100,12 +104,11 @@ function makeCard(item, waiting = false, history = null) {
 function readArchiveHeader(state) {
   let next = null, status = 'not_started';
   try {
-    if (Object.hasOwn(state, 'archive')) {
-      next = parseArchiveManifest(state.archive);
-      if (next.updated_at !== state.site_generated_at || next.release_run_id !== state.updates?.release_run_id || next.release_run_attempt !== state.updates?.release_run_attempt) throw new Error('archive_mismatch');
-      status = 'unloaded';
-    }
-  } catch { next = null; status = 'error'; }
+    publicationState = parsePublication(state);
+    updates = publicationState.updates; updateStatus = updates ? 'ready' : 'not_started';
+    next = publicationState.archive;
+    if (next) status = 'unloaded';
+  } catch { publicationState = null; updates = null; updateStatus = 'unavailable'; next = null; status = 'error'; }
   if (next?.sha256 !== archiveManifest?.sha256 || !next) {
     archiveRequest++; archiveController?.abort(); archiveController = null; archive = null; archivePage = 0; archiveStatus = status;
   }
@@ -129,7 +132,8 @@ async function loadArchive() {
 }
 function renderArchive() {
   $('#archive-count').textContent = archiveManifest ? String(archiveManifest.item_count) : '—';
-  $('#archive-summary').textContent = archiveManifest ? `自 ${beijingDay(archiveManifest.started_at).replaceAll('-', '/')} 开始保留 · 累计 ${archiveManifest.item_count} 条不同内容` : '保留曾入选的内容，之后也能回来找。';
+  const size = bytes => bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+  $('#archive-summary').textContent = archiveManifest ? `自 ${beijingDay(archiveManifest.started_at).replaceAll('-', '/')} 开始保留 · 累计 ${archiveManifest.item_count} 条不同内容 · 已用 ${size(archiveManifest.byte_length)} / ${MAX_ARCHIVE_BYTES / 1024 / 1024} MiB${publicationState?.publication?.history_status === 'capacity_paused' ? ' · 新增归档暂缓，旧历史仍可阅读，需要扩容' : ''}` : '保留曾入选的内容，之后也能回来找。';
   const status = $('#archive-status'), cards = $('#archive-cards');
   $('#archive-retry').hidden = archiveStatus !== 'error';
   $('#archive-pagination').hidden = archiveStatus !== 'ready';
@@ -179,14 +183,20 @@ async function loadFeed() {
   try {
     const response = await fetch('./feed.json', { cache: 'no-store', redirect: 'error' });
     if (!response.ok) throw new Error('订阅暂时不可用，请稍后刷新；精选来源仍可浏览。');
-    const state = await response.json();
+    const chunks = [], reader = response.body.getReader(); let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read(); if (done) break;
+        size += value.byteLength; if (size > MAX_PUBLICATION_BYTES) { await reader.cancel(); throw new Error('订阅数据过大，请稍后重试。'); }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const state = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
     if (serial !== latestRequest) return;
     readArchiveHeader(state);
     try { feed = state.feed ? parseFeed(state.feed) : null; } catch (error) { feed = null; throw error; }
-    updates = null; updateStatus = state.updates === undefined ? 'not_started' : 'unavailable';
-    if (state.updates !== undefined) {
-      try { updates = parseUpdates(state.updates); if (updates.last_built_at !== state.site_generated_at) throw new Error('updates_invalid'); updateStatus = 'ready'; } catch { /* Invalid history never becomes an invented zero. */ }
-    }
     let siteTime = '本站更新时间暂不可用';
     try { assertFresh(state.site_generated_at); siteTime = `本站更新：${beijingTime(state.site_generated_at)}（本批页面生成时间，北京时间）`; } catch { /* Older deployments may not include a page generation timestamp. */ }
     $('#site-updated-at').textContent = `${siteTime} · 自动更新：每天北京时间06:17，排程可能延迟`;

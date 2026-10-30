@@ -1,0 +1,6 @@
+export const MAX_ARCHIVE_BYTES = 16 * 1024 * 1024;
+export const MAX_HISTORY_IDS = 200000;
+export const MAX_HISTORY_BYTES = 4 * 1024 * 1024;
+export const MAX_PUBLICATION_BYTES = 8 * 1024 * 1024;
+export const MAX_HANDOFF_BYTES = 2 * 1024 * 1024;
+export const MAX_ARCHIVE_SOURCE_BYTES = MAX_ARCHIVE_BYTES + 1024 * 1024;

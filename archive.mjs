@@ -1,6 +1,7 @@
 // Version 1 is a frozen public snapshot format, independent of the live feed rules.
+import { MAX_ARCHIVE_BYTES, MAX_HISTORY_IDS } from './capacity.mjs';
 export const ARCHIVE_TOPICS = { language: '语言互动', movement: '大运动', fine_motor: '精细动作', sensory: '感官盆', art: '美育', reading: '绘本', everyday: '亲子游戏', theory: '陪伴方式' };
-export const ARCHIVE_LIMIT = 16 * 1024 * 1024;
+export const ARCHIVE_LIMIT = MAX_ARCHIVE_BYTES;
 const AGE = 28 * 86400000, SKEW = 5 * 60000;
 const fail = () => { throw new Error('archive_invalid'); };
 function stamp(value) {
@@ -80,7 +81,7 @@ function record(raw, start, end) {
   return { first_archived_at: raw.first_archived_at, last_recommended_at: raw.last_recommended_at, snapshot_at: raw.snapshot_at, collected_at: raw.collected_at, mode: raw.mode, selection: raw.selection, description_truncated: raw.description_truncated, item: clean };
 }
 export function parseArchive(raw, now = Date.now(), production = false) {
-  if (!raw || raw.version !== 1 || !Array.isArray(raw.records) || raw.records.length > 50000) fail();
+  if (!raw || raw.version !== 1 || !Array.isArray(raw.records) || raw.records.length > MAX_HISTORY_IDS) fail();
   const times = dates(raw, now), marker = release(raw, production), ids = new Set();
   const records = raw.records.map(value => {
     const clean = record(value, stamp(times.started_at), stamp(times.updated_at));
@@ -100,10 +101,11 @@ export function advanceArchive(previous, entries, at, runId = 'preview') {
       records.set(entry.item.id, { ...entry, first_archived_at: at, last_recommended_at: entry.snapshot_at, description_truncated: description.length > 400, item: { ...entry.item, description: description.slice(0, 400).join('') } });
     }
   }
+  if (records.size > MAX_HISTORY_IDS) throw new Error('archive_capacity');
   return parseArchive({ version: 1, started_at: old?.started_at || at, updated_at: at, release_run_id: runId, release_run_attempt: 1, records: [...records.values()] }, now);
 }
 export function parseArchiveManifest(raw, now = Date.now(), production = false) {
-  if (!raw || raw.version !== 1 || raw.path !== 'archive.json' || !Number.isSafeInteger(raw.item_count) || raw.item_count < 0 || raw.item_count > 50000 || !Number.isSafeInteger(raw.byte_length) || raw.byte_length < 1 || raw.byte_length > ARCHIVE_LIMIT || typeof raw.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(raw.sha256)) fail();
+  if (!raw || raw.version !== 1 || raw.path !== 'archive.json' || !Number.isSafeInteger(raw.item_count) || raw.item_count < 0 || raw.item_count > MAX_HISTORY_IDS || !Number.isSafeInteger(raw.byte_length) || raw.byte_length < 1 || raw.byte_length > ARCHIVE_LIMIT || typeof raw.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(raw.sha256)) fail();
   return { version: 1, path: 'archive.json', ...dates(raw, now), item_count: raw.item_count, byte_length: raw.byte_length, sha256: raw.sha256, ...release(raw, production) };
 }
 export async function sha256(bytes) { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(value => value.toString(16).padStart(2, '0')).join(''); }

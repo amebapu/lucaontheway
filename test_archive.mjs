@@ -75,6 +75,7 @@ test('the v1 validator is independent of changed live model, topics and expiry c
   assert.ok(Object.keys(TOPICS).every(key => Object.hasOwn(ARCHIVE_TOPICS, key)), 'A current topic change requires an archive schema migration.');
   const root = await temporary(t);
   await copyFile(new URL('archive.mjs', import.meta.url), join(root, 'archive.mjs'));
+  await copyFile(new URL('capacity.mjs', import.meta.url), join(root, 'capacity.mjs'));
   const current = (await readFile(new URL('feed.mjs', import.meta.url), 'utf8')).replace("CONTENT_MODEL = 'deepseek/deepseek-flash'", "CONTENT_MODEL = 'changed/model'").replace("language: '语言互动'", "new_topic: '新主题'").replace('MAX_AGE = 28 * 86400000', 'MAX_AGE = 1');
   await writeFile(join(root, 'feed.mjs'), current);
   const frozen = await import(pathToFileURL(join(root, 'archive.mjs'))), changed = await import(pathToFileURL(join(root, 'feed.mjs')));
@@ -157,7 +158,7 @@ test('separate publication handoff cannot inflate the calendar history file near
 test('invalid production archive sources stop actual builds before clearing output', async t => {
   const root = await temporary(t), current = feed(at(0), [item(1, at(0))]);
   await mkdir(join(root, 'data')); await mkdir(join(root, 'dist')); await writeFile(join(root, 'dist/index.html'), 'SYNTHETIC_PREVIOUS_SITE');
-  for (const name of ['index.html', 'styles.css', 'app.mjs', 'feed.mjs', 'archive.mjs']) await copyFile(new URL(name, import.meta.url), join(root, name));
+  for (const name of ['index.html', 'styles.css', 'app.mjs', 'feed.mjs', 'archive.mjs', 'capacity.mjs']) await copyFile(new URL(name, import.meta.url), join(root, name));
   await writeFile(join(root, 'data/feed.json'), JSON.stringify({ feed: current, channels: [channel] }));
   const updates = history(); await writeFile(join(root, 'data/updates.json'), JSON.stringify({ run_id: ctx.run_id, updates }));
   const env = { ...process.env, GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'amebapu/lucaontheway', GITHUB_REF: ctx.ref, GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_RUN_ATTEMPT: '1', GITHUB_RUN_ID: ctx.run_id, GITHUB_SHA: ctx.sha };
@@ -166,7 +167,7 @@ test('invalid production archive sources stop actual builds before clearing outp
     const result = spawnSync(process.execPath, [fileURLToPath(new URL('scripts/build.mjs', import.meta.url))], { cwd: root, env, encoding: 'utf8' });
     assert.notEqual(result.status, 0); assert.equal(await readFile(join(root, 'dist/index.html'), 'utf8'), 'SYNTHETIC_PREVIOUS_SITE');
   }
-  await writeFile(join(root, 'data/archive-source.json'), JSON.stringify({ run_id: ctx.run_id, previous: initial(), seed: null }));
+  await writeFile(join(root, 'data/archive-source.json'), JSON.stringify({ run_id: ctx.run_id, previous: initial(), manifest: (await encodeArchive(initial())).manifest, seed: null }));
   const result = spawnSync(process.execPath, [fileURLToPath(new URL('scripts/build.mjs', import.meta.url))], { cwd: root, env, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
   const saved = JSON.parse(await readFile(join(root, 'dist/archive.json'))); assert.deepEqual(saved.records[0], initial().records[0]); assert.equal(saved.records.length, 2);

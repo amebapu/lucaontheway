@@ -10,9 +10,9 @@
     "captions": "node scripts/captions.mjs",
     "enrich": "node scripts/enrich.mjs",
     "build": "node scripts/build.mjs",
-    "test": "node --test test_feed.mjs test_rss.mjs test_pages.mjs test_enrich.mjs test_captions.mjs test_youtube_api.mjs test_updates.mjs test_archive.mjs",
+    "test": "node --test test_feed.mjs test_rss.mjs test_pages.mjs test_enrich.mjs test_captions.mjs test_youtube_api.mjs test_updates.mjs test_archive.mjs test_capacity.mjs",
     "dev": "npm run build && node scripts/serve.mjs",
-    "check": "node --check app.mjs && node --check archive.mjs && node --check scripts/archive.mjs && node --check scripts/serve.mjs && node --check scripts/collect.mjs && node --check scripts/youtube-api.mjs && node --check scripts/enrich.mjs && node --check scripts/captions.mjs && node --check scripts/updates.mjs && npm test"
+    "check": "node --check app.mjs && node --check capacity.mjs && node --check archive.mjs && node --check scripts/archive.mjs && node --check scripts/serve.mjs && node --check scripts/collect.mjs && node --check scripts/youtube-api.mjs && node --check scripts/enrich.mjs && node --check scripts/captions.mjs && node --check scripts/updates.mjs && npm test"
   },
   "dependencies": { "saxes": "6.0.0" }
 }
